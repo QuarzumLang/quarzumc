@@ -1,0 +1,205 @@
+/*
+    @std/time/duration.qz - 04/08/2026
+    Duration definition for the Quarzum Standard Library
+
+    A Duration represents a length of time, stored as a signed number
+    of nanoseconds, so negative durations are valid.
+
+    Create one with the factory functions ofNanos, ofMicros, ofMillis,
+    ofSeconds, ofMinutes and ofHours, and query it in any unit or
+    format it with toString():
+
+        const d = ofSeconds(90);
+        println(d.getMinutes());   // 1
+        println(d.toString());     // 1m 30s
+*/
+import "@std/string.qz"
+import "@std/syscall.qz"
+
+/*
+    Defines a length of time. A Duration is stored as a signed
+    number of nanoseconds, so negative durations are valid.
+
+    Members:
+        - nanos: The length of time in nanoseconds
+*/
+class Duration {
+    var nanos: int64
+
+    function new(nanos: int64){
+        this.nanos = nanos
+    }
+
+    /*
+        Returns the duration in nanoseconds.
+    */
+    function getNanos(): int64 {
+        return this.nanos
+    }
+
+    /*
+        Returns the duration in microseconds (truncated).
+    */
+    function getMicros(): int64 {
+        return this.nanos / 1000
+    }
+
+    /*
+        Returns the duration in milliseconds (truncated).
+    */
+    function getMillis(): int64 {
+        return this.nanos / 1000000
+    }
+
+    /*
+        Returns the duration in seconds (truncated).
+    */
+    function getSeconds(): int64 {
+        return this.nanos / 1000000000
+    }
+
+    /*
+        Returns the duration in minutes (truncated).
+    */
+    function getMinutes(): int64 {
+        return this.nanos / 60000000000
+    }
+
+    /*
+        Returns the duration in hours (truncated).
+    */
+    function getHours(): int64 {
+        return this.nanos / 3600000000000
+    }
+
+    /*
+        Returns the sum of this duration and another one.
+
+        Arguments:
+            - other: The duration to add
+    */
+    function add(other: Duration): Duration {
+        return new Duration(this.nanos + other.nanos)
+    }
+
+    /*
+        Returns this duration minus another one.
+
+        Arguments:
+            - other: The duration to subtract
+    */
+    function sub(other: Duration): Duration {
+        return new Duration(this.nanos - other.nanos)
+    }
+
+    /*
+        Compares this duration with another one.
+
+        Returns:
+            - A negative number if this duration is shorter, 0 if
+              they are equal, or a positive number if this duration
+              is longer.
+
+        Arguments:
+            - other: The duration to compare against
+    */
+    function compare(other: Duration): int64 {
+        if(this.nanos < other.nanos) return -1
+        if(this.nanos > other.nanos) return 1
+        return 0
+    }
+
+    /*
+        Suspends the calling thread for this duration.
+    */
+    function sleep(){
+        var req: char[]
+        req.length = 16
+        req.ptr = alloc char[16]
+        var base = req.ptr as int64
+        *((base + 0) as ptr<int64>) = this.nanos / 1000000000
+        *((base + 8) as ptr<int64>) = this.nanos % 1000000000
+        nanoSleep(req)
+    }
+
+    /*
+        Formats the duration as hours, minutes and seconds, e.g.
+        "1m 30s". Durations shorter than one second are formatted
+        as nanoseconds, and negative durations are prefixed with "-".
+    */
+    function toString(): string {
+        if(this.nanos < 0){
+            const neg = new Duration(-this.nanos)
+            return "-" + neg.toString()
+        }
+        var h = this.nanos / 3600000000000
+        var m = (this.nanos % 3600000000000) / 60000000000
+        var s = (this.nanos % 60000000000) / 1000000000
+        var result = ""
+        if(h > 0) result = result + toString(h as uint64) + "h "
+        if(m > 0) result = result + toString(m as uint64) + "m "
+        if(s > 0) result = result + toString(s as uint64) + "s"
+        if(result == "") return toString(this.nanos as uint64) + "ns"
+        return result
+    }
+}
+
+/*
+    Creates a Duration of the given number of nanoseconds.
+
+    Arguments:
+        - n: The number of nanoseconds
+*/
+function ofNanos(n: int64): Duration {
+    return new Duration(n)
+}
+
+/*
+    Creates a Duration of the given number of microseconds.
+
+    Arguments:
+        - us: The number of microseconds
+*/
+function ofMicros(us: int64): Duration {
+    return new Duration(us * 1000)
+}
+
+/*
+    Creates a Duration of the given number of milliseconds.
+
+    Arguments:
+        - ms: The number of milliseconds
+*/
+function ofMillis(ms: int64): Duration {
+    return new Duration(ms * 1000000)
+}
+
+/*
+    Creates a Duration of the given number of seconds.
+
+    Arguments:
+        - s: The number of seconds
+*/
+function ofSeconds(s: int64): Duration {
+    return new Duration(s * 1000000000)
+}
+
+/*
+    Creates a Duration of the given number of minutes.
+
+    Arguments:
+        - m: The number of minutes
+*/
+function ofMinutes(m: int64): Duration {
+    return new Duration(m * 60000000000)
+}
+
+/*
+    Creates a Duration of the given number of hours.
+
+    Arguments:
+        - h: The number of hours
+*/
+function ofHours(h: int64): Duration {
+    return new Duration(h * 3600000000000)
+}

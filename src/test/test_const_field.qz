@@ -1,0 +1,21 @@
+import "@std/io.qz"
+
+class Person {
+    var name: string
+    const id: int64
+
+    function new(name: string, id: int64){
+        this.name = name
+        this.id = id
+    }
+
+    function print(){
+        println(this.name)
+    }
+}
+
+function main() {
+    var p = new Person("Alice", 42)
+    p.print()
+    exit 0
+}

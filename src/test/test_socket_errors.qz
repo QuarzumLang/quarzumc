@@ -1,0 +1,32 @@
+import "@std/network/socket.qz"
+import "@std/io.qz"
+
+function main() {
+    const client = expect(openStream())
+    const r = connect(client, 9099, 127, 0, 0, 1)
+    const code = match(r) {
+        case Ok => 0,
+        case Err(e: SocketError) => e.getCode()
+    }
+    if(code < 0) {
+        println("refused: " + errorName(code))
+        println("message: " + errorMessage(code))
+    } else {
+        println("unexpected: connection should be refused")
+        exit 1
+    }
+    expectVoid(close(client))
+
+    const bad = connect(client, 70000, 127, 0, 0, 1)
+    const code2 = match(bad) {
+        case Ok => 0,
+        case Err(e: SocketError) => e.getCode()
+    }
+    if(code2 == EINVAL) {
+        println("invalid port rejected")
+    } else {
+        println("unexpected: bad port should be EINVAL")
+        exit 1
+    }
+    exit 0
+}

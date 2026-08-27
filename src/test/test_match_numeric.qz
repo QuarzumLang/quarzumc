@@ -1,0 +1,34 @@
+import "@std/io.qz"
+
+const FOO: int64 = -9
+const BAR: int64 = -22
+const BAZ: int64 = -111
+
+function classify(code: int64): string {
+    return match(code) {
+        case FOO => "foo",
+        case BAR => "bar",
+        case BAZ => "baz",
+        default => "other"
+    }
+}
+
+function localLabel(limit: int64): string {
+    const target = 42
+    return match(limit) {
+        case target => "hits 42",
+        case FOO => "hits foo",
+        default => "no"
+    }
+}
+
+function main() {
+    println(classify(-9))
+    println(classify(-22))
+    println(classify(-111))
+    println(classify(7))
+    println(localLabel(42))
+    println(localLabel(-9))
+    println(localLabel(1))
+    exit 0
+}

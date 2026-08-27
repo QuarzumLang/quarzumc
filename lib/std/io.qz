@@ -1,0 +1,95 @@
+/*
+    @std/io.qz - 02/08/2026
+    Standard I/O library for Quarzum
+*/
+import "@std/file.qz"
+
+/*
+    Standard input stream (file descriptor 0)
+
+    Reading this file provides user input or piped data.
+    Do not close this stream.
+*/
+const stdin = File(0)
+
+/*
+    Standard output stream (file descriptor 1)
+
+    Writing this file allows to write bytes of data into
+    the terminal or the standard output.
+    Do not close this stream.
+*/
+const stdout = File(1)
+
+/*
+    Standard error stream (file descriptor 2)
+
+    Writing this file allows to write bytes of data into
+    the terminal or the standard error.
+    Do not close this stream.
+*/
+const stderr = File(2)
+
+/*
+    Prints a message into the standard output.
+
+    Arguments:
+        - message: The content to display
+    Example:
+        print("Hello world!"); 
+*/
+function print(message: string){
+    fwrite(stdout, message)
+}
+
+/*
+    Prints a message into the standard output.
+    The message ends with a new line character (\n).
+
+    Arguments:
+        - message: The content to display
+    Example:
+        println("Hello world!"); 
+*/
+function println(message: string){
+    fwrite(stdout, message)
+    fwrite(stdout, "\n")
+}
+
+/*
+    Prints a message into the standard error.
+
+    Arguments:
+        - message: The content to display
+    Example:
+        eprint("An error has ocurred"); 
+*/
+function eprint(message: string){
+    fwrite(stderr, message)
+}
+
+/*
+    Prints a message into the standard error.
+    The message ends with a new line character (\n).
+
+    Arguments:
+        - message: The content to display
+    Example:
+        eprintln("An error has ocurred"); 
+*/
+function eprintln(message: string){
+    fwrite(stderr, message)
+    fwrite(stderr, "\n")
+}
+
+/*
+    Reads the standard input as a string.
+
+    Returns:
+        - A string with the data given in the standard
+        input.
+
+    Example:
+        const message = input();
+*/
+function input(): string => fread(stdin)

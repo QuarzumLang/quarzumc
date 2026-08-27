@@ -1,0 +1,11 @@
+struct File {
+    var fd: int64
+    var name: string
+    var is_open: bool
+}
+
+function main() {
+    var f = File(1)
+    var msg = "Hello from Quarzum!\n"
+    exit 0
+}

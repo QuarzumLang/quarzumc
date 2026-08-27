@@ -1,0 +1,25 @@
+/*
+    @std/errors/error.qz - 03/08/2026
+    Error trait definition for the Quarzum Standard Library
+*/
+
+/*
+    Defines an Error. Errors should be used when an 
+    operation does not succeed and there is more than one
+    possible reason to do so.
+
+    Errors should return a message that explains all the
+    possible information about how and why this error ocurred.
+*/
+trait Error {
+    /*
+        Returns the error message
+
+        Returns:
+            - A string containing the error information
+
+        Examples:
+            eprintln(myError.getMessage());
+    */
+    function getMessage(): string
+}

@@ -1,0 +1,25 @@
+function main() {
+    // float64 arithmetic
+    var a: float64 = 3.14
+    var b: float64 = 2.0
+    var c: float64 = a * b
+
+    // float64 subtraction
+    var d: float64 = 10.0
+    var e: float64 = 3.5
+    var f: float64 = d - e
+
+    // float64 division
+    var g: float64 = d / e
+
+    // int to float implicit
+    var h: float64 = a + 5
+
+    // float to int cast
+    var i: int64 = h as int64
+
+    // float comparison
+    var j: bool = a > b
+
+    exit i
+}

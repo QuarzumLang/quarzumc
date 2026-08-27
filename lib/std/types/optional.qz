@@ -1,0 +1,21 @@
+/*
+    @std/types/optional.qz - 02/08/2026
+    Optional definition for the Quarzum Standard Library
+*/
+
+/*
+    Defines a generic Optional value.
+
+    An Optional stores either an element, or none. 
+    Useful for getting elements in collections or returning
+    values only in certain cases inside a function.
+
+    Examples:
+        var opt: Optional<int>;
+        opt = Optional.None;
+        opt = Optional.Some(4);
+*/
+enum Optional<T> {
+    Some(T),
+    None
+}

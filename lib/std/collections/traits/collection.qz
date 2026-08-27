@@ -1,0 +1,65 @@
+/*
+    @std/collections/traits/collection.qz - 02/08/2026
+    Collection trait for the Quarzum Standard Library
+*/
+
+/*
+    Defines a generic Collection. 
+
+    A Collection stores elements. It allows to add,
+    remove, clear elements, check the existance of an element,
+    and exposes its size.
+*/
+trait Collection<T> {
+    /*
+        Gets the Collection size
+
+        Returns:
+            - An uint64 with the Collection size
+    */
+    pure function size() : uint64
+
+    /*
+        Checks if the Collection is empty
+
+        Returns:
+            - true if size == 0, false otherwise
+    */
+    pure function isEmpty() : bool
+
+    /*
+        Adds an element to the Collection
+
+        Arguments:
+            - element: The element to be added
+    */
+    function add(element: T)
+
+    /*
+        Removes an element from the Collection
+
+        Returns:
+            - true if the removal was sucessful, false otherwise
+        
+        Arguments:
+            - element: The element to be removed
+    */
+    function remove(element: T) : bool
+
+    /*
+        Checks if an element exists inside the Collection
+
+        Returns:
+            - true if any element is equal to the argument,
+              false otherwise
+        
+        Arguments:
+            - element: The element to be checked
+    */
+    function contains(element: T) : bool
+
+    /*
+        Clears the entire Collection and sets size to 0
+    */
+    function clear()
+}

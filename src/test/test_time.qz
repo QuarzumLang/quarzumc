@@ -1,0 +1,34 @@
+import "@std/time/time.qz"
+import "@std/io.qz"
+
+function main() {
+    const d = ofSeconds(90)
+    println(toString(d.getNanos() as uint64))
+    println(toString(d.getMillis() as uint64))
+    println(toString(d.getMinutes() as uint64))
+    println(d.toString())
+
+    const d2 = ofNanos(123456789)
+    println(d2.toString())
+
+    const neg = ofMillis(-2500)
+    println(neg.toString())
+
+    const t = new Timer()
+    const sleepDur = ofMillis(110)
+    sleepDur.sleep()
+    const el = t.elapsed()
+    println(toString(el.getMillis() as uint64))
+
+    const dt = now()
+    println(dt.toString())
+    const date = dt.getDate()
+    println(toString(date.year as uint64))
+    println(toString(date.month as uint64))
+    println(toString(date.day as uint64))
+
+    const add = d.add(d2)
+    println(toString(add.getNanos() as uint64))
+    println(toString(d.compare(d2) as uint64))
+    exit 0
+}

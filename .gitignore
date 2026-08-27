@@ -1,0 +1,4 @@
+*.o
+*.asm
+build/
+docs/

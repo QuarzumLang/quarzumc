@@ -1,0 +1,645 @@
+/*
+    @std/network/socket.qz - 03/08/2026
+    TCP/IP socket operations for Quarzum (Linux)
+
+    This library exposes a blocking interface to the Linux socket
+    API, implemented directly over the kernel syscalls. Sockets are
+    represented by a Socket value which wraps the file descriptor
+    and tracks whether it is still open.
+
+    Instead of relying on magic negative numbers, every fallible
+    operation returns a typed result:
+
+        - SocketResult.Ok(socket) / Err(error) for operations that
+          produce a socket (openStream, openDatagram, accept).
+        - CountResult.Ok(n) / Err(error) for operations that return
+          a byte count (read, write).
+        - VoidResult.Ok / Err(error) for operations that succeed or
+          fail without a value (bind, listen, connect, shutdown,
+          close).
+
+    The Err variant always carries a SocketError, which knows the
+    raw error code and a human readable message (getMessage()).
+
+    The expect family unwraps these results and aborts the program
+    with the error message if the operation failed:
+
+        const server = expect(openStream());
+        expectVoid(bind(server, 8080));
+        expectVoid(listen(server, 8));
+
+    Or handle the error explicitly with a match. Match on an enum
+    dispatches by variant; the cases must be written in the order
+    the variants are declared (Ok before Err):
+
+        match(r) {
+            case Ok(s: Socket) => doSomething(s),
+            case Err(e: SocketError) => -1
+        };
+
+    Match also dispatches on plain numeric values, comparing the
+    scrutinee against the case values, with an optional default:
+
+        return match(code) {
+            case ECONNREFUSED => "Connection refused",
+            case EADDRINUSE => "Address already in use",
+            default => "Unknown"
+        };
+
+    Buffers passed to read and write are slices (char[]). Their
+    length is used as the operation limit, so it is impossible to
+    read or write past the end of the underlying buffer.
+
+    Examples:
+        // TCP echo server on 127.0.0.1:8080
+        const server = expect(openStream());
+        expectVoid(bind(server, 8080));
+        expectVoid(listen(server, 8));
+        const client = expect(accept(server));
+
+        var buffer: char[];
+        buffer.length = 256;
+        buffer.ptr = alloc char[256];
+        const n = expectCount(read(client, buffer));
+        if(n > 0) {
+            buffer.length = n;
+            expectCount(write(client, buffer));
+        }
+        expectVoid(close(client));
+        expectVoid(close(server));
+*/
+import "@std/errors/error.qz"
+import "@std/io.qz"
+import "@std/syscall.qz"
+
+/*
+    IPv4 address family.
+*/
+const AF_INET: int64 = 2
+
+/*
+    IPv6 address family.
+*/
+const AF_INET6: int64 = 10
+
+/*
+    Stream (TCP) socket type.
+*/
+const SOCK_STREAM: int64 = 1
+
+/*
+    Datagram (UDP) socket type.
+*/
+const SOCK_DGRAM: int64 = 2
+
+/*
+    Disables further reads on the socket.
+*/
+const SHUT_RD: int64 = 0
+
+/*
+    Disables further writes on the socket.
+*/
+const SHUT_WR: int64 = 1
+
+/*
+    Disables reads and writes on the socket.
+*/
+const SHUT_RDWR: int64 = 2
+
+/*
+    Bad file descriptor.
+*/
+const EBADF: int64 = -9
+
+/*
+    Operation would block (non-blocking mode).
+*/
+const EAGAIN: int64 = -11
+
+/*
+    Invalid argument.
+*/
+const EINVAL: int64 = -22
+
+/*
+    Broken pipe.
+*/
+const EPIPE: int64 = -32
+
+/*
+    Socket operation on a non-socket.
+*/
+const ENOTSOCK: int64 = -88
+
+/*
+    Address family not supported by the protocol.
+*/
+const EAFNOSUPPORT: int64 = -97
+
+/*
+    Address already in use.
+*/
+const EADDRINUSE: int64 = -98
+
+/*
+    Connection reset by peer.
+*/
+const ECONNRESET: int64 = -104
+
+/*
+    Socket is already connected.
+*/
+const EISCONN: int64 = -106
+
+/*
+    Transport endpoint is not connected.
+*/
+const ENOTCONN: int64 = -107
+
+/*
+    Connection timed out.
+*/
+const ETIMEDOUT: int64 = -110
+
+/*
+    Connection refused.
+*/
+const ECONNREFUSED: int64 = -111
+
+/*
+    Operation now in progress (non-blocking connect).
+*/
+const EINPROGRESS: int64 = -115
+
+/*
+    Returns the symbolic name of an error code returned by a
+    socket operation.
+
+    Returns:
+        - The errno name as a string, or "UNKNOWN" if the code is
+          not recognized.
+
+    Arguments:
+        - code: The error code (a negative value returned by a
+          socket operation).
+*/
+function errorName(code: int64): string {
+    return match(code) {
+        case EAFNOSUPPORT => "EAFNOSUPPORT",
+        case EADDRINUSE => "EADDRINUSE",
+        case ECONNREFUSED => "ECONNREFUSED",
+        case ECONNRESET => "ECONNRESET",
+        case EISCONN => "EISCONN",
+        case ENOTCONN => "ENOTCONN",
+        case ETIMEDOUT => "ETIMEDOUT",
+        case EAGAIN => "EAGAIN",
+        case EINPROGRESS => "EINPROGRESS",
+        case EBADF => "EBADF",
+        case EPIPE => "EPIPE",
+        case ENOTSOCK => "ENOTSOCK",
+        case EINVAL => "EINVAL",
+        default => "UNKNOWN"
+    }
+}
+
+/*
+    Returns a human readable description of an error code.
+
+    Returns:
+        - A string describing the error.
+
+    Arguments:
+        - code: The error code (a negative value returned by a
+          socket operation).
+*/
+function errorMessage(code: int64): string {
+    return match(code) {
+        case EAFNOSUPPORT => "Address family not supported",
+        case EADDRINUSE => "Address already in use",
+        case ECONNREFUSED => "Connection refused",
+        case ECONNRESET => "Connection reset by peer",
+        case EISCONN => "Socket is already connected",
+        case ENOTCONN => "Transport endpoint is not connected",
+        case ETIMEDOUT => "Connection timed out",
+        case EAGAIN => "Operation would block",
+        case EINPROGRESS => "Operation now in progress",
+        case EBADF => "Bad file descriptor",
+        case EPIPE => "Broken pipe",
+        case ENOTSOCK => "Socket operation on a non-socket",
+        case EINVAL => "Invalid argument",
+        default => "Unknown socket error"
+    }
+}
+
+/*
+    Defines a Socket. A Socket wraps the file descriptor of a
+    socket and tracks whether it is still open.
+
+    Members:
+        - fd: The file descriptor
+        - isOpen: Whether the socket is still open. Becomes false
+                  once close() succeeds.
+
+    Do not modify a Socket manually, use the socket operations.
+    A Socket whose isOpen is false must not be used.
+*/
+struct Socket {
+    var fd: int64
+    var isOpen: bool
+}
+
+/*
+    Defines a socket error. Carries the raw error code returned by
+    the kernel and a human readable message.
+
+    Members:
+        - code: The raw error code (a negated errno value, see the
+                E* constants)
+        - message: A human readable description of the error
+*/
+class SocketError implements Error {
+    var code: int64
+    var message: string
+
+    function new(code: int64) {
+        this.code = code
+        this.message = errorMessage(code)
+    }
+
+    /*
+        Returns the human readable error message.
+
+        Returns:
+            - A string describing the error
+    */
+    function getMessage(): string {
+        return this.message
+    }
+
+    /*
+        Returns the raw error code.
+
+        Returns:
+            - The negated errno value of the error
+    */
+    function getCode(): int64 {
+        return this.code
+    }
+}
+
+/*
+    Result of an operation that produces a socket.
+
+    - Ok(socket): The operation succeeded and produced a Socket
+    - Err(error): The operation failed
+*/
+enum SocketResult {
+    Ok(Socket),
+    Err(SocketError)
+}
+
+/*
+    Result of an operation that returns a byte count.
+
+    - Ok(count): The operation succeeded, count bytes were
+                 processed
+    - Err(error): The operation failed
+*/
+enum CountResult {
+    Ok(int64),
+    Err(SocketError)
+}
+
+/*
+    Result of an operation that succeeds or fails without a value.
+
+    - Ok: The operation succeeded
+    - Err(error): The operation failed
+*/
+enum VoidResult {
+    Ok,
+    Err(SocketError)
+}
+
+/*
+    Checks that a value is a valid port (0 to 65535).
+
+    Returns:
+        - true if the value is a valid port.
+
+    Arguments:
+        - port: The value to check
+*/
+function validPort(port: int64): bool {
+    return port >= 0 && port <= 65535
+}
+
+/*
+    Checks that a value fits in a byte (0 to 255).
+
+    Returns:
+        - true if the value fits in a byte.
+
+    Arguments:
+        - value: The value to check
+*/
+function validByte(value: int64): bool {
+    return value >= 0 && value <= 255
+}
+
+/*
+    Builds a sockaddr_in buffer for an IPv4 address and port.
+
+    The caller is responsible for validating the port and the
+    address bytes with validPort and validByte before calling this
+    function; invalid values are silently truncated.
+
+    Returns:
+        - A 16 byte char[] slice containing the address in the
+          format expected by socketBind and socketConnect.
+
+    Arguments:
+        - port: The port in host byte order
+        - a, b, c, d: The four bytes of the IPv4 address. Use
+          0, 0, 0, 0 to bind to all interfaces
+*/
+function makeAddress(port: int64, a: int64, b: int64, c: int64, d: int64): char[] {
+    var address: char[]
+    address.length = 16
+    address.ptr = alloc char[16]
+    var base = address.ptr as int64
+    // sin_family = AF_INET
+    *((base + 0) as ptr<char>) = AF_INET as char
+    // sin_port in network byte order (big endian)
+    *((base + 2) as ptr<char>) = (port % 256) as char
+    *((base + 3) as ptr<char>) = (port / 256) as char
+    // sin_addr.s_addr
+    *((base + 4) as ptr<char>) = a as char
+    *((base + 5) as ptr<char>) = b as char
+    *((base + 6) as ptr<char>) = c as char
+    *((base + 7) as ptr<char>) = d as char
+    // The remaining 8 bytes (sin_zero) are already zeroed by alloc.
+    return address
+}
+
+/*
+    Creates a new IPv4 TCP socket.
+
+    Returns:
+        - SocketResult.Ok with the new socket, or SocketResult.Err
+          with the error if the socket could not be created.
+
+    Examples:
+        const server = expect(openStream());
+*/
+function openStream(): SocketResult {
+    const fd = socketCreate(AF_INET, SOCK_STREAM, 0)
+    if(fd < 0) return SocketResult.Err(new SocketError(fd))
+    return SocketResult.Ok(Socket(fd, true))
+}
+
+/*
+    Creates a new IPv4 UDP socket.
+
+    Returns:
+        - SocketResult.Ok with the new socket, or SocketResult.Err
+          with the error if the socket could not be created.
+*/
+function openDatagram(): SocketResult {
+    const fd = socketCreate(AF_INET, SOCK_DGRAM, 0)
+    if(fd < 0) return SocketResult.Err(new SocketError(fd))
+    return SocketResult.Ok(Socket(fd, true))
+}
+
+/*
+    Binds a socket to a port on all interfaces (0.0.0.0).
+
+    Returns:
+        - VoidResult.Ok on success, or VoidResult.Err with an
+          EADDRINUSE error if the port is already in use.
+
+    Arguments:
+        - socket: The socket to bind
+        - port: The port to listen on, from 0 to 65535
+*/
+function bind(socket: Socket, port: int64): VoidResult {
+    if(not validPort(port)) return VoidResult.Err(new SocketError(EINVAL))
+    const address = makeAddress(port, 0, 0, 0, 0)
+    const result = socketBind(socket.fd, address)
+    if(result < 0) return VoidResult.Err(new SocketError(result))
+    return VoidResult.Ok
+}
+
+/*
+    Marks a socket as passive and ready to accept connections.
+
+    Returns:
+        - VoidResult.Ok on success, or VoidResult.Err with the
+          error if the operation failed.
+
+    Arguments:
+        - socket: The socket to listen on
+        - backlog: The maximum length of the pending connection
+                   queue
+*/
+function listen(socket: Socket, backlog: int64): VoidResult {
+    const result = socketListen(socket.fd, backlog)
+    if(result < 0) return VoidResult.Err(new SocketError(result))
+    return VoidResult.Ok
+}
+
+/*
+    Accepts an incoming connection on a listening socket. This call
+    blocks until a connection arrives.
+
+    Returns:
+        - SocketResult.Ok with the new connected socket, or
+          SocketResult.Err with the error if the operation failed.
+
+    Arguments:
+        - socket: The listening socket
+*/
+function accept(socket: Socket): SocketResult {
+    const fd = socketAccept(socket.fd)
+    if(fd < 0) return SocketResult.Err(new SocketError(fd))
+    return SocketResult.Ok(Socket(fd, true))
+}
+
+/*
+    Connects a socket to an IPv4 host and port.
+
+    Returns:
+        - VoidResult.Ok on success, or VoidResult.Err with an
+          ECONNREFUSED error if the connection was refused.
+
+    Arguments:
+        - socket: The socket to connect
+        - port: The port to connect to, from 0 to 65535
+        - a, b, c, d: The four bytes of the remote IPv4 address
+*/
+function connect(socket: Socket, port: int64, a: int64, b: int64, c: int64, d: int64): VoidResult {
+    if(not validPort(port)) return VoidResult.Err(new SocketError(EINVAL))
+    if(not validByte(a)) return VoidResult.Err(new SocketError(EINVAL))
+    if(not validByte(b)) return VoidResult.Err(new SocketError(EINVAL))
+    if(not validByte(c)) return VoidResult.Err(new SocketError(EINVAL))
+    if(not validByte(d)) return VoidResult.Err(new SocketError(EINVAL))
+    const address = makeAddress(port, a, b, c, d)
+    const result = socketConnect(socket.fd, address)
+    if(result < 0) return VoidResult.Err(new SocketError(result))
+    return VoidResult.Ok
+}
+
+/*
+    Reads bytes from a socket into a buffer. Blocks until data is
+    available or the peer closes the connection.
+
+    At most buffer.length bytes are read, so the buffer can never
+    be overrun.
+
+    Returns:
+        - CountResult.Ok with the number of bytes read (0 means the
+          peer closed the connection), or CountResult.Err with the
+          error if the operation failed. Only the first n bytes of
+          the buffer are valid data.
+
+    Arguments:
+        - socket: The connected socket
+        - buffer: The buffer where the data will be written
+*/
+function read(socket: Socket, buffer: char[]): CountResult {
+    const result = socketRead(socket.fd, buffer)
+    if(result < 0) return CountResult.Err(new SocketError(result))
+    return CountResult.Ok(result)
+}
+
+/*
+    Writes bytes from a buffer to a socket.
+
+    Returns:
+        - CountResult.Ok with the number of bytes written, or
+          CountResult.Err with the error if the operation failed.
+
+    Arguments:
+        - socket: The connected socket
+        - data: The bytes to send
+*/
+function write(socket: Socket, data: char[]): CountResult {
+    const result = socketWrite(socket.fd, data)
+    if(result < 0) return CountResult.Err(new SocketError(result))
+    return CountResult.Ok(result)
+}
+
+/*
+    Shuts down part of a full duplex socket connection.
+
+    Returns:
+        - VoidResult.Ok on success, or VoidResult.Err with the
+          error if the operation failed.
+
+    Arguments:
+        - socket: The socket to shut down
+        - how: What to disable, one of SHUT_RD, SHUT_WR or SHUT_RDWR
+*/
+function shutdown(socket: Socket, how: int64): VoidResult {
+    const result = socketShutdown(socket.fd, how)
+    if(result < 0) return VoidResult.Err(new SocketError(result))
+    return VoidResult.Ok
+}
+
+/*
+    Closes a socket and releases its file descriptor.
+
+    After a successful close the socket is marked as not open. Do
+    not use the socket after closing it.
+
+    Returns:
+        - VoidResult.Ok on success, or VoidResult.Err with the
+          error if the operation failed.
+
+    Arguments:
+        - socket: The socket to close
+*/
+function close(socket: Socket): VoidResult {
+    const result = socketClose(socket.fd)
+    if(result < 0) return VoidResult.Err(new SocketError(result))
+    socket.isOpen = false
+    return VoidResult.Ok
+}
+
+/*
+    Prints an error message to the standard error and aborts the
+    program. Never returns.
+
+    Arguments:
+        - error: The error to report
+*/
+function panic(error: SocketError): Socket {
+    eprintln(error.getMessage())
+    exit 1
+    return Socket(0, false)
+}
+
+/*
+    Prints an error message to the standard error and aborts the
+    program. Never returns.
+
+    Arguments:
+        - error: The error to report
+*/
+function panicInt(error: SocketError): int64 {
+    eprintln(error.getMessage())
+    exit 1
+    return 0
+}
+
+/*
+    Unwraps a SocketResult. Aborts the program with the error
+    message if the operation failed.
+
+    Returns:
+        - The Socket of a successful operation.
+
+    Arguments:
+        - result: The result to unwrap
+
+    Examples:
+        const client = expect(accept(server));
+*/
+function expect(result: SocketResult): Socket {
+    return match(result) {
+        case Ok(s: Socket) => s,
+        case Err(e: SocketError) => panic(e)
+    }
+}
+
+/*
+    Unwraps a CountResult. Aborts the program with the error
+    message if the operation failed.
+
+    Returns:
+        - The byte count of a successful operation.
+
+    Arguments:
+        - result: The result to unwrap
+*/
+function expectCount(result: CountResult): int64 {
+    return match(result) {
+        case Ok(n: int64) => n,
+        case Err(e: SocketError) => panicInt(e)
+    }
+}
+
+/*
+    Unwraps a VoidResult. Aborts the program with the error message
+    if the operation failed.
+
+    Arguments:
+        - result: The result to unwrap
+*/
+function expectVoid(result: VoidResult) {
+    match(result) {
+        case Ok => 0,
+        case Err(e: SocketError) => panicInt(e)
+    }
+}

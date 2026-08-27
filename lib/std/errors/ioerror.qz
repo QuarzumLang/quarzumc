@@ -1,0 +1,7 @@
+import "@std/errors/error.qz"
+import "@std/file.qz"
+
+trait IOError implements Error {
+    function getMessage(): string
+    function getFile(): File
+}

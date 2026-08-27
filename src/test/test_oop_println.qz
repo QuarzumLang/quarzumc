@@ -1,0 +1,28 @@
+import "@std/io.qz"
+
+class Point {
+    var x: float64
+    var y: float64
+
+    function new(x: float64, y: float64) {
+        this.x = x
+        this.y = y
+    }
+
+    function getX() : float64 {
+        return this.x
+    }
+
+    function getY() : float64 {
+        return this.y
+    }
+}
+
+function main() {
+    var p = new Point(3.0, 4.0)
+    var x = p.getX()
+    var y = p.getY()
+    println("point created")
+    println("done")
+    exit 0
+}

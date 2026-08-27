@@ -1,0 +1,12 @@
+import "@std/collections/map.qz"
+
+function main(){
+    var m = new Map<int64, bool>()
+    m.put(1, true)
+    m.put(2, false)
+    var sz: uint64 = m.size()
+    if(sz == 2){
+        return 1
+    }
+    return 0
+}

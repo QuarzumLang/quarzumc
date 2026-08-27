@@ -1,0 +1,9 @@
+import "@std/io.qz"
+import "@std/string.qz"
+
+function main() {
+    var s1 = "helloworld.qz"
+    var s2 = ".qz"
+    println(endsWith(s1, s2) ? "true" : "false")
+    exit 0
+}

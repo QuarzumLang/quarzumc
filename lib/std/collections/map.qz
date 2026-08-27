@@ -1,0 +1,199 @@
+import "@std/types/optional.qz"
+
+struct StringSlice {
+    var ptr: int64
+    var length: uint64
+}
+
+class Map<K, V> {
+    var keys: ptr<K>
+    var values: ptr<V>
+    var occupied: ptr<uint8>
+    var capacity: uint64
+    var size: uint64
+
+    function new(){
+        this.capacity = 16
+        this.size = 0
+        this.keys = alloc K[this.capacity]
+        this.values = alloc V[this.capacity]
+        this.occupied = alloc uint8[this.capacity]
+        this.clearSlots()
+    }
+
+    function occAddr(idx: uint64) : int64 {
+        return this.occupied as int64 + idx
+    }
+
+    function isOcc(idx: uint64) : bool {
+        return *((this.occAddr(idx)) as ptr<uint8>) != 0
+    }
+
+    function setOcc(idx: uint64, val: uint8){
+        *((this.occAddr(idx)) as ptr<uint8>) = val
+    }
+
+    function clearSlots(){
+        for(var i: uint64 = 0; i < this.capacity; i = i + 1){
+            this.setOcc(i, 0)
+        }
+    }
+
+    function keyAddr(idx: uint64) : int64 {
+        return this.keys as int64 + idx * sizeof(K)
+    }
+
+    function valAddr(idx: uint64) : int64 {
+        return this.values as int64 + idx * sizeof(V)
+    }
+
+    function hash(key: K) : uint64 {
+        if(sizeof(K) == 16){
+            var s2 = key as StringSlice
+            var h: uint64 = 0
+            var i: uint64 = 0
+            while(i < s2.length){
+                var byte = *((s2.ptr + i) as ptr<char>)
+                h = h * 33 + (byte as uint64)
+                i += 1
+            }
+            return h % this.capacity
+        }
+        return (key as uint64) % this.capacity
+    }
+
+    function put(key: K, value: V){
+        if(this.size * 3 >= this.capacity * 2){
+            this.resize(this.capacity * 2)
+        }
+        var idx = this.hash(key)
+        while(this.isOcc(idx)){
+            if(*((this.keyAddr(idx)) as ptr<K>) == key){
+                *((this.valAddr(idx)) as ptr<V>) = value
+                return
+            }
+            idx = (idx + 1) % this.capacity
+        }
+        *((this.keyAddr(idx)) as ptr<K>) = key
+        *((this.valAddr(idx)) as ptr<V>) = value
+        this.setOcc(idx, 1)
+        this.size = this.size + 1
+    }
+
+    function get(key: K) : Optional<V> {
+        var idx = this.hash(key)
+        while(this.isOcc(idx)){
+            if(*((this.keyAddr(idx)) as ptr<K>) == key){
+                return Optional.Some(*((this.valAddr(idx)) as ptr<V>))
+            }
+            idx = (idx + 1) % this.capacity
+        }
+        return Optional.None
+    }
+
+    function has(key: K) : bool {
+        var idx = this.hash(key)
+        while(this.isOcc(idx)){
+            if(*((this.keyAddr(idx)) as ptr<K>) == key){
+                return true
+            }
+            idx = (idx + 1) % this.capacity
+        }
+        return false
+    }
+
+    function remove(key: K) : bool {
+        var idx = this.hash(key)
+        while(this.isOcc(idx)){
+            if(*((this.keyAddr(idx)) as ptr<K>) == key){
+                this.setOcc(idx, 0)
+                this.size = this.size - 1
+                this.rehashAfterRemove(idx)
+                return true
+            }
+            idx = (idx + 1) % this.capacity
+        }
+        return false
+    }
+
+    function rehashAfterRemove(removedIdx: uint64){
+        var idx = (removedIdx + 1) % this.capacity
+        while(this.isOcc(idx)){
+            var k = *((this.keyAddr(idx)) as ptr<K>)
+            var v = *((this.valAddr(idx)) as ptr<V>)
+            this.setOcc(idx, 0)
+            this.size = this.size - 1
+            var newIdx = this.hash(k)
+            while(this.isOcc(newIdx)){
+                newIdx = (newIdx + 1) % this.capacity
+            }
+            *((this.keyAddr(newIdx)) as ptr<K>) = k
+            *((this.valAddr(newIdx)) as ptr<V>) = v
+            this.setOcc(newIdx, 1)
+            this.size = this.size + 1
+            idx = (idx + 1) % this.capacity
+        }
+    }
+
+    function keys() : ptr<K> {
+        var result = alloc K[this.size]
+        var pos: uint64 = 0
+        for(var i: uint64 = 0; i < this.capacity; i = i + 1){
+            if(this.isOcc(i)){
+                *((result as int64 + pos * sizeof(K)) as ptr<K>) =
+                    *((this.keyAddr(i)) as ptr<K>)
+                pos = pos + 1
+            }
+        }
+        return result
+    }
+
+    function values() : ptr<V> {
+        var result = alloc V[this.size]
+        var pos: uint64 = 0
+        for(var i: uint64 = 0; i < this.capacity; i = i + 1){
+            if(this.isOcc(i)){
+                *((result as int64 + pos * sizeof(V)) as ptr<V>) =
+                    *((this.valAddr(i)) as ptr<V>)
+                pos = pos + 1
+            }
+        }
+        return result
+    }
+
+    function size() : uint64 {
+        return this.size
+    }
+
+    function isEmpty() : bool {
+        return this.size == 0
+    }
+
+    function clear(){
+        this.clearSlots()
+        this.size = 0
+    }
+
+    function resize(newCapacity: uint64){
+        var oldKeys = this.keys
+        var oldValues = this.values
+        var oldOccupied = this.occupied
+        var oldCapacity: uint64 = this.capacity
+        this.keys = alloc K[newCapacity]
+        this.values = alloc V[newCapacity]
+        this.occupied = alloc uint8[newCapacity]
+        this.capacity = newCapacity
+        this.size = 0
+        this.clearSlots()
+        for(var i: uint64 = 0; i < oldCapacity; i = i + 1){
+            if(*((oldOccupied as int64 + i) as ptr<uint8>) != 0){
+                var k = *((oldKeys as int64 + i * sizeof(K)) as ptr<K>)
+                var v = *((oldValues as int64 + i * sizeof(V)) as ptr<V>)
+                this.put(k, v)
+            }
+        }
+        free oldKeys
+        free oldValues
+        free oldOccupied
+    }
+}

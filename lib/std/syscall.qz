@@ -1,0 +1,176 @@
+/*
+    @std/syscall.qz - 04/08/2026
+    Low level system calls for Quarzum (Linux)
+
+    This file exposes the raw Linux syscalls used by the standard
+    library, implemented directly over the kernel interface. Each
+    declared function maps 1:1 to a kernel syscall.
+
+    All functions return the raw syscall result: a value >= 0 on
+    success, or -errno on failure.
+
+    Prefer the high level APIs of the standard library (Duration,
+    DateTime, Timer, the socket helpers, file operations) over these
+    functions.
+*/
+
+/*
+    The real-time clock (wall clock time).
+*/
+const CLOCK_REALTIME: int64 = 0
+
+/*
+    A monotonic clock that is not affected by system clock changes.
+    Used by Timer.
+*/
+const CLOCK_MONOTONIC: int64 = 1
+
+/*
+    Reads the current time of a clock into a timespec buffer.
+    This is a low level function, prefer now() or monotonicNanos().
+
+    Returns:
+        - 0 on success, or a negative value on error.
+
+    Arguments:
+        - clk_id: The clock to read, one of the CLOCK_* constants
+        - tp: A buffer of at least 16 bytes where the time will be
+              written (tv_sec as int64, tv_nsec as int64)
+*/
+function clockGetTime(clk_id: int64, tp: char[]): int64
+
+/*
+    Suspends the calling thread until the requested time has elapsed.
+    This is a low level function, prefer the Duration.sleep method.
+
+    Returns:
+        - 0 on success, or a negative value on error.
+
+    Arguments:
+        - req: A buffer of at least 16 bytes with the timespec to
+               sleep (tv_sec as int64, tv_nsec as int64)
+*/
+function nanoSleep(req: char[]): int64
+
+/*
+    Creates a new socket file descriptor. This is a low level
+    function, prefer openStream or openDatagram.
+
+    Returns:
+        - The file descriptor of the new socket, or a negative
+          value if an error occurred.
+
+    Arguments:
+        - domain: The address family (see AF_INET)
+        - type: The socket type (see SOCK_STREAM)
+        - protocol: The protocol, usually 0 to pick the default
+*/
+function socketCreate(domain: int64, type: int64, protocol: int64): int64
+
+/*
+    Binds a socket to an address. This is a low level function,
+    prefer the bind helper.
+
+    Returns:
+        - 0 on success, or a negative value if an error occurred.
+
+    Arguments:
+        - fd: The file descriptor of the socket
+        - address: A sockaddr buffer (see makeAddress)
+*/
+function socketBind(fd: int64, address: char[]): int64
+
+/*
+    Marks a socket as passive and ready to accept connections. This
+    is a low level function, prefer the listen helper.
+
+    Returns:
+        - 0 on success, or a negative value if an error occurred.
+
+    Arguments:
+        - fd: The file descriptor of the listening socket
+        - backlog: The maximum length of the pending queue
+*/
+function socketListen(fd: int64, backlog: int64): int64
+
+/*
+    Accepts an incoming connection on a listening socket. This is a
+    low level function, prefer the accept helper.
+
+    Returns:
+        - The file descriptor of the new connected socket, or a
+          negative value if an error occurred.
+
+    Arguments:
+        - fd: The file descriptor of the listening socket
+*/
+function socketAccept(fd: int64): int64
+
+/*
+    Connects a socket to a remote address. This is a low level
+    function, prefer the connect helper.
+
+    Returns:
+        - 0 on success, or a negative value if an error occurred.
+
+    Arguments:
+        - fd: The file descriptor of the socket
+        - address: A sockaddr buffer (see makeAddress)
+*/
+function socketConnect(fd: int64, address: char[]): int64
+
+/*
+    Reads bytes from a socket into a buffer. This is a low level
+    function, prefer the read helper.
+
+    The buffer length is the maximum number of bytes that will be
+    read, so the kernel never writes past the end of the buffer.
+
+    Returns:
+        - The number of bytes read (0 means the peer closed the
+          connection), or a negative value if an error occurred.
+
+    Arguments:
+        - fd: The file descriptor of the socket
+        - buffer: The buffer where the data will be written
+*/
+function socketRead(fd: int64, buffer: char[]): int64
+
+/*
+    Writes bytes from a buffer to a socket. This is a low level
+    function, prefer the write helper.
+
+    Returns:
+        - The number of bytes written, or a negative value if an
+          error occurred.
+
+    Arguments:
+        - fd: The file descriptor of the socket
+        - data: The bytes to send
+*/
+function socketWrite(fd: int64, data: char[]): int64
+
+/*
+    Shuts down part of a full duplex socket connection. This is a
+    low level function, prefer the shutdown helper.
+
+    Returns:
+        - 0 on success, or a negative value if an error occurred.
+
+    Arguments:
+        - fd: The file descriptor of the socket
+        - how: What to disable, one of SHUT_RD, SHUT_WR or SHUT_RDWR
+*/
+function socketShutdown(fd: int64, how: int64): int64
+
+/*
+    Closes a socket and releases its file descriptor. This is a low
+    level function, prefer the close helper.
+
+    Returns:
+        - 0 on success, or a negative value if an error occurred.
+
+    Arguments:
+        - fd: The file descriptor of the socket
+*/
+function socketClose(fd: int64): int64

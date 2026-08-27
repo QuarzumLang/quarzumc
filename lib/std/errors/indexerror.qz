@@ -1,0 +1,3 @@
+class IndexError implements Error {
+    function getMessage() => "Index out of bounds"
+}

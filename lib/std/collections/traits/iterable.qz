@@ -1,0 +1,33 @@
+/*
+    @std/collections/traits/iterable.qz - 02/08/2026
+    Iterable trait for the Quarzum Standard Library
+*/
+import "@std/types/optional.qz"
+
+/*
+    Defines a generic Iterable. An Iterable allows to
+    iterate through its elements. Useful to use functional
+    programming in Quarzum.
+*/
+trait Iterable<T> {
+    /*
+        Applies a callback to each element.
+        Equivalent to foreach keyword + return the Iterable.
+
+        Arguments:
+            - fn: The callback to be applied. Must return void.
+        
+        Returns:
+            - The Iterable itself
+    */
+    function forEach(fn: (T) => void)
+
+    /*
+        Gets the first element of the Iterable
+
+        Returns:
+            - Optional.Some(T) if the Iterable has elements
+            - Optional.None if the Iterable is empty
+    */
+    function first(): Optional<T>
+}

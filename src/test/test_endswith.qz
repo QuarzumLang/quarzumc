@@ -1,0 +1,11 @@
+import "@std/io.qz"
+import "@std/string.qz"
+
+function main() {
+    println(endsWith("helloworld.qz", ".qz") ? "true" : "false")
+    println(endsWith("helloworld.txt", ".qz") ? "true" : "false")
+    println(endsWith("ab", "abc") ? "true" : "false")
+    println(endsWith("abc", "a") ? "true" : "false")
+    println(endsWith("abc", "abc") ? "true" : "false")
+    exit 0
+}

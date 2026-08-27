@@ -1,0 +1,14 @@
+/*
+    @std/file.qz - File operations for Quarzum
+*/
+
+struct File {
+    var fd: int64
+    var name: string
+    var is_open: bool
+}
+
+function fopen(path: string, mode: string) : File
+function fclose(f: File)
+function fread(f: File) : uint8[]
+function fwrite(f: File, data: uint8[])

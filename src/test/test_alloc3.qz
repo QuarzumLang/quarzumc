@@ -1,0 +1,7 @@
+function main() {
+    var p = alloc int64
+    *p = 42
+    var val = *p
+    free p
+    exit val
+}

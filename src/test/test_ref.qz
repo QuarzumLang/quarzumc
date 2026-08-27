@@ -1,0 +1,32 @@
+class Counter {
+    var value: int
+
+    function new() {
+        this.value = 0
+    }
+
+    function increment() {
+        this.value = this.value + 1
+    }
+
+    function getValue() : int {
+        return this.value
+    }
+}
+
+function takeRef(c: Counter) : int {
+    return c.getValue()
+}
+
+function makeCounter() : Counter {
+    return new Counter()
+}
+
+function main() {
+    var c: Counter = makeCounter()
+    c.increment()
+    c.increment()
+    var v = takeRef(c)
+    free c
+    exit v - 2
+}

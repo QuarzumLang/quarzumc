@@ -1,0 +1,11 @@
+import "@std/io.qz"
+
+function main() {
+    var x = -5
+    var y = -x
+    println("int neg done")
+    var f: float64 = 3.14
+    var g = -f
+    println("float neg done")
+    exit 0
+}

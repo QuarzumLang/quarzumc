@@ -1,0 +1,10 @@
+import "@std/io.qz"
+
+function main(args: string[]){
+    foreach(a in args){
+        if(a == "c"){
+            break
+        }
+        println(a)
+    }
+}

@@ -1,0 +1,42 @@
+/*
+    @std/time/time.qz - 04/08/2026
+    Time and duration operations for Quarzum (Linux)
+
+    This is the entry point of the time library. It groups together:
+
+        - Duration: a length of time, stored as nanoseconds.
+        - DateTime: an absolute point in time (Unix epoch).
+        - Timer:   measures elapsed time using the monotonic clock.
+
+    A Duration is created with the factory functions ofNanos,
+    ofMicros, ofMillis, ofSeconds, ofMinutes and ofHours, and can
+    be queried in any unit or formatted with toString():
+
+        const d = ofSeconds(90);
+        println(d.getMinutes());   // 1
+        println(d.toString());     // 1m 30s
+
+    A DateTime is captured with the now() function and exposes the
+    calendar components through getYear(), getMonth(), getDay(),
+    getHour(), getMinute() and getSecond():
+
+        const now = now();
+        println(now.toString());   // 2026-08-04 12:34:56
+
+    A Timer records its starting point when created, and elapsed()
+    returns the time spent since then as a Duration:
+
+        const t = new Timer();
+        ofMillis(100).sleep();
+        println(t.elapsed().getMillis());
+
+    Example:
+        const start = now();
+        println(start.toString());
+        ofSeconds(1).sleep();
+        const elapsed = now().sub(start);
+        println(elapsed.toString());
+*/
+import "@std/time/duration.qz"
+import "@std/time/datetime.qz"
+import "@std/time/timer.qz"

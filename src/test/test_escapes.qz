@@ -1,0 +1,8 @@
+import "@std/io.qz"
+function main() {
+    var a = '\n'
+    var b = '\\'
+    var c = '\t'
+    var d = '\0'
+    println("ok")
+}

@@ -1,0 +1,25 @@
+struct Date {
+    var year: int64
+    var month: int64
+    var day: int64
+}
+
+function makeDate(): Date {
+    return Date(2026, 8, 5)
+}
+
+function shiftDate(d: Date): Date {
+    d.year = d.year + 1
+    return d
+}
+
+function main() {
+    var d = makeDate()
+    if(d.year == 2026 && d.month == 8 && d.day == 5) {
+        var e = shiftDate(d)
+        if(d.year == 2026 && e.year == 2027) {
+            exit 0
+        }
+    }
+    exit 1
+}

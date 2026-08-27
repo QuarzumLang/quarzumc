@@ -1,0 +1,20 @@
+import "@std/collections/list.qz"
+import "@std/collections/stack.qz"
+
+function main(){
+    var l = new List<int64>()
+    l.add(1)
+    l.add(2)
+    l.add(3)
+
+    var s = new Stack<bool>()
+    s.push(true)
+    s.push(false)
+
+    var listSize: uint64 = l.size()
+    var stackSize: uint64 = s.size()
+    if(listSize == 3 && stackSize == 2){
+        return 1
+    }
+    return 0
+}

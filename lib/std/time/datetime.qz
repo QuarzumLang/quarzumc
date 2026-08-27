@@ -1,0 +1,171 @@
+/*
+    @std/time/datetime.qz - 04/08/2026
+    DateTime definition for the Quarzum Standard Library
+
+    A DateTime is an absolute point in time, expressed as the number
+    of seconds (and a remainder in nanoseconds) since the Unix epoch.
+
+    Capture the current wall clock time with now() and expose the
+    calendar components through getYear(), getMonth(), getDay(),
+    getHour(), getMinute() and getSecond():
+
+        const now = now();
+        println(now.toString());   // 2026-08-04 12:34:56
+*/
+import "@std/string.qz"
+import "@std/syscall.qz"
+import "@std/time/duration.qz"
+
+/*
+    A calendar date: year, month and day.
+*/
+struct Date {
+    var year: int64
+    var month: int64
+    var day: int64
+}
+
+/*
+    Converts a count of days since the Unix epoch into a calendar
+    date, using the civil-from-days algorithm.
+
+    Arguments:
+        - days: The number of days since 1970-01-01
+*/
+function daysToDate(days: int64): Date {
+    var z = days + 719468
+    var era = (z >= 0 ? z : z - 146096) / 146097
+    var doe = z - era * 146097
+    var yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    var y = yoe + era * 400
+    var doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    var mp = (5 * doy + 2) / 153
+    var d = doy - (153 * mp + 2) / 5 + 1
+    var m = mp < 10 ? mp + 3 : mp - 9
+    if(m <= 2) y += 1
+    return Date(y, m, d)
+}
+
+/*
+    Defines an absolute point in time, expressed as the number of
+    seconds (and a remainder in nanoseconds) since the Unix epoch.
+
+    Members:
+        - seconds: Whole seconds since 1970-01-01 00:00:00 UTC
+        - nanos: The remainder in nanoseconds, from 0 to 999999999
+*/
+class DateTime {
+    var seconds: int64
+    var nanos: int64
+
+    function new(seconds: int64, nanos: int64){
+        this.seconds = seconds
+        this.nanos = nanos
+    }
+
+    /*
+        Returns the whole number of seconds since the Unix epoch.
+    */
+    function getEpochSeconds(): int64 {
+        return this.seconds
+    }
+
+    /*
+        Returns the nanosecond remainder (0 to 999999999).
+    */
+    function getEpochNanos(): int64 {
+        return this.nanos
+    }
+
+    /*
+        Returns the calendar date of this instant.
+    */
+    function getDate(): Date {
+        return daysToDate(this.seconds / 86400)
+    }
+
+    /*
+        Returns the year, e.g. 2026.
+    */
+    function getYear(): int64 {
+        const d = this.getDate()
+        return d.year
+    }
+
+    /*
+        Returns the month, from 1 to 12.
+    */
+    function getMonth(): int64 {
+        const d = this.getDate()
+        return d.month
+    }
+
+    /*
+        Returns the day of the month, from 1 to 31.
+    */
+    function getDay(): int64 {
+        const d = this.getDate()
+        return d.day
+    }
+
+    /*
+        Returns the hour, from 0 to 23.
+    */
+    function getHour(): int64 {
+        return (this.seconds % 86400) / 3600
+    }
+
+    /*
+        Returns the minute, from 0 to 59.
+    */
+    function getMinute(): int64 {
+        return (this.seconds % 3600) / 60
+    }
+
+    /*
+        Returns the second, from 0 to 59.
+    */
+    function getSecond(): int64 {
+        return this.seconds % 60
+    }
+
+    /*
+        Returns the difference between this instant and another one,
+        as a Duration. Positive if this instant is later.
+
+        Arguments:
+            - other: The instant to subtract
+    */
+    function sub(other: DateTime): Duration {
+        return new Duration((this.seconds - other.seconds) * 1000000000 + (this.nanos - other.nanos))
+    }
+
+    /*
+        Formats the instant as "YYYY-MM-DD HH:MM:SS".
+    */
+    function toString(): string {
+        var result = ""
+        result = result + toString(this.getYear() as uint64)
+        result = result + "-" + toStringWithFixedLength(this.getMonth() as uint64, 2)
+        result = result + "-" + toStringWithFixedLength(this.getDay() as uint64, 2)
+        result = result + " " + toStringWithFixedLength(this.getHour() as uint64, 2)
+        result = result + ":" + toStringWithFixedLength(this.getMinute() as uint64, 2)
+        result = result + ":" + toStringWithFixedLength(this.getSecond() as uint64, 2)
+        return result
+    }
+}
+
+/*
+    Returns the current wall clock time as a DateTime.
+
+    Example:
+        const now = now();
+*/
+function now(): DateTime {
+    var tp: char[]
+    tp.length = 16
+    tp.ptr = alloc char[16]
+    clockGetTime(CLOCK_REALTIME, tp)
+    var base = tp.ptr as int64
+    return new DateTime(*((base + 0) as ptr<int64>), *((base + 8) as ptr<int64>))
+}

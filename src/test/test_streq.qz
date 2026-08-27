@@ -1,0 +1,9 @@
+import "@std/io.qz"
+
+function main() {
+    var s = "hello"
+    println(s == "hello" ? "true" : "false")
+    println(s == "world" ? "true" : "false")
+    println(s != "world" ? "true" : "false")
+    exit 0
+}

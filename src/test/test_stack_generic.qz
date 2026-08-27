@@ -1,0 +1,14 @@
+import "@std/collections/stack.qz"
+
+function main(){
+    var s = new Stack<int64>()
+    s.push(10)
+    s.push(20)
+    s.push(30)
+    s.pop()
+    var sz: uint64 = s.size()
+    if(sz == 2){
+        return 1
+    }
+    return 0
+}

@@ -1,0 +1,217 @@
+/*
+    @std/char.qz - 03/08/2026
+    Character utilities for Quarzum
+*/
+
+/*
+    Start of Heading (ASCII 1)
+
+    A control character used to delimit headings
+    in transmitted messages.
+*/
+const SOH = 1 as char
+
+/*
+    Start of Text (ASCII 2)
+
+    A control character used to mark the start
+    of the text of a message.
+*/
+const STX = 2 as char
+
+/*
+    End of Text (ASCII 3)
+
+    A control character used to mark the end
+    of the text of a message.
+*/
+const ETX = 3 as char
+
+/*
+    End of Transmission (ASCII 4)
+
+    A control character used to mark the end
+    of a transmission.
+*/
+const EOT = 4 as char
+
+/*
+    Enquiry (ASCII 5)
+
+    A control character used to request a
+    response from a remote station.
+*/
+const ENQ = 5 as char
+
+/*
+    Acknowledge (ASCII 6)
+
+    A control character used to indicate that
+    a transmission was received correctly.
+*/
+const ACK = 6 as char
+
+/*
+    Checks if a character is a letter of the
+    English alphabet.
+
+    Returns:
+        - true if the character is 'A'-'Z' or 'a'-'z',
+          false otherwise
+
+    Arguments:
+        - c: The character to check
+
+    Examples:
+        isAlpha('a'); // true
+        isAlpha('5'); // false
+*/
+pure function isAlpha(c: char) => (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z')
+
+/*
+    Checks if a character is an uppercase letter of the
+    English alphabet.
+
+    Returns:
+        - true if the character is 'A'-'Z',
+          false otherwise
+
+    Arguments:
+        - c: The character to check
+
+    Examples:
+        isUpper('a'); // false
+        isUpper('B'); // true
+*/
+pure function isUpper(c: char) => (c >= 'A' and c <= 'Z')
+
+/*
+    Checks if a character is a lowercase letter of the
+    English alphabet.
+
+    Returns:
+        - true if the character is 'a'-'z',
+          false otherwise
+
+    Arguments:
+        - c: The character to check
+
+    Examples:
+        isUpper('a'); // true
+        isUpper('B'); // false
+*/
+pure function isLower(c: char) => (c >= 'a' and c <= 'z')
+
+/*
+    Checks if a character is a decimal digit.
+
+    Returns:
+        - true if the character is '0'-'9',
+          false otherwise
+
+    Arguments:
+        - c: The character to check
+
+    Examples:
+        isDigit('7'); // true
+        isDigit('x'); // false
+*/
+pure function isDigit(c: char) => (c >= '0' and c <= '9')
+
+/*
+    Checks if a character is an octal digit.
+
+    Returns:
+        - true if the character is '0'-'7',
+          false otherwise
+
+    Arguments:
+        - c: The character to check
+
+    Examples:
+        isOctalDigit('5'); // true
+        isOctalDigit('8'); // false
+*/
+pure function isOctalDigit(c: char) => (c >= '0' and c <= '7')
+
+/*
+    Checks if a character is alphanumeric.
+
+    Returns:
+        - true if the character is a letter or a
+          decimal digit, false otherwise
+
+    Arguments:
+        - c: The character to check
+
+    Examples:
+        isAlphaNumeric('a'); // true
+        isAlphaNumeric('9'); // true
+        isAlphaNumeric('_'); // false
+*/
+pure function isAlphaNumeric(c: char) => isAlpha(c) or isDigit(c)
+
+/*
+    Checks if a character is a hexadecimal digit.
+
+    Returns:
+        - true if the character is '0'-'9', 'a'-'f'
+          or 'A'-'F', false otherwise
+
+    Arguments:
+        - c: The character to check
+
+    Examples:
+        isHexDigit('f'); // true
+        isHexDigit('F'); // true
+        isHexDigit('g'); // false
+*/
+pure function isHexDigit(c: char) => (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+
+/*
+    Checks if a character is a whitespace character.
+
+    Returns:
+        - true if the character is a space, a new
+          line or a tab, false otherwise
+
+    Arguments:
+        - c: The character to check
+
+    Examples:
+        isSpace(' ');  // true
+        isSpace('\n'); // true
+*/
+pure function isSpace(c: char) => c == ' ' or c == '\n' or c == '\t'
+
+/*
+    Checks if a character is a control character.
+
+    Returns:
+        - true if the character has a control code
+          (0-31 or 127), false otherwise
+
+    Arguments:
+        - c: The character to check
+
+    Examples:
+        isControl('\0'); // true
+        isControl('A');  // false
+*/
+pure function isControl(c: char) => c <= 31 or c == 127
+
+/*
+    Checks if a character is a whitespace character.
+
+    Returns:
+        - true if the character is ' ', '\t', '\n', '\v',
+          '\f' or '\r', false otherwise
+
+    Arguments:
+        - c: The character to check
+
+    Examples:
+        isWhitespace(' '); // true
+        isWhitespace('A');  // false
+*/
+pure function isWhitespace(c: char) => c == ' ' or c == '\t' or c == '\n' or c == '\v' or c == '\f' or c == '\r'

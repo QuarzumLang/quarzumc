@@ -1,0 +1,50 @@
+import "@std/io.qz"
+import "@std/string.qz"
+
+enum Pair {
+    Num(int64),
+    Text(string)
+}
+
+struct Box {
+    var value: int64
+}
+
+enum BoxResult {
+    Ok(Box),
+    Err(int64)
+}
+
+function describe(p: Pair): string {
+    return match(p) {
+        case Num(n: int64) => toString(n as uint64),
+        case Text(t: string) => t
+    }
+}
+
+function unwrap(r: BoxResult): int64 {
+    return match(r) {
+        case Ok(b: Box) => b.value,
+        case Err(code: int64) => code
+    }
+}
+
+function main() {
+    const a = Pair.Num(42)
+    const b = Pair.Text("hello")
+    if(describe(a) == "42" && describe(b) == "hello") {
+        println("match ok")
+    } else {
+        println("match failed")
+        exit 1
+    }
+    const x = Box(7)
+    const ok = BoxResult.Ok(x)
+    const err = BoxResult.Err(-111)
+    if(unwrap(ok) == 7 && unwrap(err) == -111) {
+        println("box ok")
+        exit 0
+    }
+    println("box failed")
+    exit 1
+}

@@ -1,0 +1,96 @@
+import "@std/io.qz"
+import "@std/string.qz"
+
+enum Pair {
+    Num(int64),
+    Text(string)
+}
+
+struct Box {
+    var value: int64
+}
+
+enum BoxResult {
+    Ok(Box),
+    Err(int64)
+}
+
+enum Opt<T> {
+    Some(T),
+    None
+}
+
+function unwrapStr(o: Opt<string>): string {
+    if(o == Opt.Some(value: string)){
+        return value
+    }
+    return "none"
+}
+
+function main() {
+    const a = Pair.Num(42)
+    if(a == Pair.Num(n: int64)){
+        println(toString(n as uint64))
+    } else {
+        println("num failed")
+        exit 1
+    }
+
+    const b = Pair.Text("hello")
+    if(b == Pair.Text(t: string)){
+        println(t)
+    } else {
+        println("text failed")
+        exit 1
+    }
+
+    if(a != Pair.Text(t: string)){
+        println("ne ok")
+    } else {
+        println("ne failed")
+        exit 1
+    }
+
+    const x = Box(7)
+    const ok = BoxResult.Ok(x)
+    if(ok == BoxResult.Ok(box: Box)){
+        println(toString(box.value as uint64))
+    } else {
+        println("box failed")
+        exit 1
+    }
+
+    const err = BoxResult.Err(-111)
+    if(err == BoxResult.Err(code: int64) && code == -111){
+        println("err ok")
+    } else {
+        println("err failed")
+        exit 1
+    }
+
+    if(err == BoxResult.Ok(box: Box)){
+        println("negative failed")
+        exit 1
+    } else {
+        println("negative ok")
+    }
+
+    const g: Opt<string> = Opt.Some("generic")
+    if(unwrapStr(g) == "generic"){
+        println("generic ok")
+    } else {
+        println("generic failed")
+        exit 1
+    }
+
+    var count: int64 = 0
+    while(count < 3){
+        count += 1
+    }
+    const w = Pair.Text("loop")
+    while(w == Pair.Text(s: string) && count == 3){
+        println(s)
+        count += 1
+    }
+    exit 0
+}

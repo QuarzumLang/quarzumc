@@ -1,0 +1,61 @@
+/*
+    @std/time/timer.qz - 04/08/2026
+    Timer definition for the Quarzum Standard Library
+
+    A Timer is a stopwatch over the monotonic clock. It starts
+    counting when it is created, and elapsed() returns the time
+    spent since then as a Duration:
+
+        const t = new Timer();
+        ofMillis(100).sleep();
+        println(t.elapsed().getMillis());
+*/
+import "@std/syscall.qz"
+import "@std/time/duration.qz"
+
+/*
+    Returns the current monotonic clock reading in nanoseconds.
+
+    The value is only meaningful for computing differences between
+    two readings of the same clock. See Timer.
+*/
+function monotonicNanos(): int64 {
+    var tp: char[]
+    tp.length = 16
+    tp.ptr = alloc char[16]
+    clockGetTime(CLOCK_MONOTONIC, tp)
+    var base = tp.ptr as int64
+    var sec = *((base + 0) as ptr<int64>)
+    var nsec = *((base + 8) as ptr<int64>)
+    return sec * 1000000000 + nsec
+}
+
+/*
+    Defines a stopwatch over the monotonic clock. The timer starts
+    counting when it is created.
+
+    Members:
+        - startNanos: The clock reading when the timer was started
+*/
+class Timer {
+    var startNanos: int64
+
+    function new(){
+        this.startNanos = monotonicNanos()
+    }
+
+    /*
+        Returns the time elapsed since the timer was started, as a
+        Duration.
+    */
+    function elapsed(): Duration {
+        return new Duration(monotonicNanos() - this.startNanos)
+    }
+
+    /*
+        Resets the timer, so elapsed() restarts from zero.
+    */
+    function reset(){
+        this.startNanos = monotonicNanos()
+    }
+}

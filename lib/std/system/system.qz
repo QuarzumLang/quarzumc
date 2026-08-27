@@ -1,0 +1,9 @@
+/* 
+	system.qz - 22/08/2026
+	System basic operations for the Quarzum Standard Library
+*/
+import "@std/syscall.qz"
+
+function system(command: string){
+	
+}

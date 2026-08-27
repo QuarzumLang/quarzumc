@@ -1,0 +1,10 @@
+import "@std/io.qz"
+
+function main() {
+    println("hello world")
+    var name = "Quarzum"
+    println(name)
+    var x = 42
+    println("done")
+    exit 0
+}

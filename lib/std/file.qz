@@ -1,0 +1,88 @@
+/*
+    @std/file.qz - 02/08/2026
+    File operations for Quarzum
+*/
+
+/*
+    Defines a File. Used as a wrapper of
+    the file descriptor (fd) to make standard
+    file operations more secure.
+
+    Members:
+        - fd: The file descriptor
+        - name: Its name in the file system
+        - isOpen: An internal flag to determine if
+                  a file is open or not
+
+    Warning:
+        Do not modify a File manually, it will lead
+        to unexpected behaviour. Use the standard 
+        file operations.
+*/
+struct File {
+    var fd: int64
+    var name: string
+    var isOpen: bool
+}
+
+/*
+    Opens a file given its name and mode.
+
+    Returns:
+        - A File if the path is correct and the
+          system has permissions to open it.
+        - A FileNotFoundError if the file does not exist
+        - A PermissionError if the program has not permissions
+          to open the file
+
+    Arguments:
+        - path: The absolute or relative path to the
+                target file.
+        - mode: The permissions the program will have on
+                the file. It will consist in a string when:
+                    - A 'w' char means write
+                    - A 'r' char means read
+                    - A 'x' char means execute
+                    - A 'b' char means binary mode
+
+    Examples:
+        const file = fopen("file.bin", "rwb");
+*/
+unsafe function fopen(path: string, mode: string) : File
+
+/*
+    Closes a File. Do not use a File after closed,
+    except for reopening it. 
+
+    Arguments:
+        - f: The File to be closed
+
+*/
+unsafe function fclose(f: File)
+
+/*
+    Reads a File entirely as a sequence of bytes.
+
+    Returns:
+        - A slice of bytes with the data
+    
+    Arguments:
+        - f: The file to be read. The file must be open.
+
+    Examples:
+        const bytes = fread(my_file);
+
+*/
+unsafe function fread(f: File) : uint8[]
+
+/*
+    Writes a sequence of bytes in a File. 
+
+    Arguments:
+        - f: The File to be written. The file must be open.
+        - data: The sequence of bytes to write.
+    
+    Examples:
+        fwrite(my_file, "Hello world!"); // The string gets converted from char[] to uint8[]
+*/
+unsafe function fwrite(f: File, data: uint8[])

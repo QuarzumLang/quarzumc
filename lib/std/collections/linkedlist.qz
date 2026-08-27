@@ -1,0 +1,254 @@
+import "@std/types/optional.qz"
+import "@std/collections/traits/collection.qz"
+import "@std/collections/traits/iterable.qz"
+
+class LinkedList<T> implements Collection<T>, Iterable<T> {
+    var data: ptr<T>
+    var next: ptr<int64>
+    var prev: ptr<int64>
+    var head: int64
+    var tail: int64
+    var capacity: uint64
+    var size: uint64
+    var freeHead: int64
+    var nextFreeIndex: int64
+
+    function new(){
+        this.capacity = 16
+        this.head = -1
+        this.tail = -1
+        this.size = 0
+        this.freeHead = -1
+        this.nextFreeIndex = 0
+        this.data = alloc T[this.capacity]
+        this.next = alloc int64[this.capacity]
+        this.prev = alloc int64[this.capacity]
+    }
+
+    function dataPtr(idx: int64) : int64 {
+        return this.data as int64 + idx as int64 * sizeof(T)
+    }
+
+    function nextPtr(idx: int64) : int64 {
+        return this.next as int64 + idx * sizeof(int64)
+    }
+
+    function prevPtr(idx: int64) : int64 {
+        return this.prev as int64 + idx * sizeof(int64)
+    }
+
+    function getNext(idx: int64) : int64 {
+        return *(this.nextPtr(idx) as ptr<int64>)
+    }
+
+    function setNext(idx: int64, val: int64){
+        *(this.nextPtr(idx) as ptr<int64>) = val
+    }
+
+    function getPrev(idx: int64) : int64 {
+        return *(this.prevPtr(idx) as ptr<int64>)
+    }
+
+    function setPrev(idx: int64, val: int64){
+        *(this.prevPtr(idx) as ptr<int64>) = val
+    }
+
+    function getData(idx: int64) : T {
+        return *(this.dataPtr(idx) as ptr<T>)
+    }
+
+    function setData(idx: int64, val: T){
+        *(this.dataPtr(idx) as ptr<T>) = val
+    }
+
+    function allocNode(element: T) : int64 {
+        var idx: int64 = 0
+        if(this.freeHead != -1){
+            idx = this.freeHead
+            this.freeHead = this.getNext(idx)
+            this.setData(idx, element)
+            this.setNext(idx, -1)
+            this.setPrev(idx, -1)
+            return idx
+        }
+        if(this.nextFreeIndex >= this.capacity){
+            this.resize(this.capacity * 2)
+        }
+        idx = this.nextFreeIndex
+        this.nextFreeIndex = this.nextFreeIndex + 1
+        this.setData(idx, element)
+        this.setNext(idx, -1)
+        this.setPrev(idx, -1)
+        return idx
+    }
+
+    function freeNode(idx: int64){
+        this.setNext(idx, this.freeHead)
+        this.freeHead = idx
+    }
+
+    function addFirst(element: T){
+        var idx = this.allocNode(element)
+        if(this.head == -1){
+            this.head = idx
+            this.tail = idx
+        } else {
+            this.setNext(idx, this.head)
+            this.setPrev(this.head, idx)
+            this.head = idx
+        }
+        this.size = this.size + 1
+    }
+
+    function addLast(element: T){
+        var idx = this.allocNode(element)
+        if(this.tail == -1){
+            this.head = idx
+            this.tail = idx
+        } else {
+            this.setPrev(idx, this.tail)
+            this.setNext(this.tail, idx)
+            this.tail = idx
+        }
+        this.size = this.size + 1
+    }
+
+    function add(element: T){
+        this.addLast(element)
+    }
+
+    function removeFirst() : Optional<T> {
+        if(this.head == -1){
+            return Optional.None
+        }
+        var idx = this.head
+        var val = this.getData(idx)
+        this.head = this.getNext(idx)
+        if(this.head != -1){
+            this.setPrev(this.head, -1)
+        } else {
+            this.tail = -1
+        }
+        this.freeNode(idx)
+        this.size = this.size - 1
+        return Optional.Some(val)
+    }
+
+    function removeLast() : Optional<T> {
+        if(this.tail == -1){
+            return Optional.None
+        }
+        var idx = this.tail
+        var val = this.getData(idx)
+        this.tail = this.getPrev(idx)
+        if(this.tail != -1){
+            this.setNext(this.tail, -1)
+        } else {
+            this.head = -1
+        }
+        this.freeNode(idx)
+        this.size = this.size - 1
+        return Optional.Some(val)
+    }
+
+    function remove(element: T) : bool {
+        var idx = this.head
+        while(idx != -1){
+            if(this.getData(idx) == element){
+                var p = this.getPrev(idx)
+                var n = this.getNext(idx)
+                if(p != -1){
+                    this.setNext(p, n)
+                } else {
+                    this.head = n
+                }
+                if(n != -1){
+                    this.setPrev(n, p)
+                } else {
+                    this.tail = p
+                }
+                this.freeNode(idx)
+                this.size = this.size - 1
+                return true
+            }
+            idx = this.getNext(idx)
+        }
+        return false
+    }
+
+    function contains(element: T) : bool {
+        var idx = this.head
+        while(idx != -1){
+            if(this.getData(idx) == element){
+                return true
+            }
+            idx = this.getNext(idx)
+        }
+        return false
+    }
+
+    function getFirst() : Optional<T> {
+        if(this.head == -1){
+            return Optional.None
+        }
+        return Optional.Some(this.getData(this.head))
+    }
+
+    function getLast() : Optional<T> {
+        if(this.tail == -1){
+            return Optional.None
+        }
+        return Optional.Some(this.getData(this.tail))
+    }
+
+    function size() : uint64 {
+        return this.size
+    }
+
+    function isEmpty() : bool {
+        return this.size == 0
+    }
+
+    function clear(){
+        this.head = -1
+        this.tail = -1
+        this.freeHead = -1
+        this.nextFreeIndex = 0
+        this.size = 0
+    }
+
+    function first() : Optional<T> {
+        return this.getFirst()
+    }
+
+    function last() : Optional<T> {
+        return this.getLast()
+    }
+
+    function resize(newCapacity: uint64){
+        var newData = alloc T[newCapacity]
+        var newNext = alloc int64[newCapacity]
+        var newPrev = alloc int64[newCapacity]
+        var oldCap: uint64 = this.capacity
+        for(var i: uint64 = 0; i < oldCap; i = i + 1){
+            var srcDOff = this.data as int64 + i * sizeof(T)
+            var dstDOff = newData as int64 + i * sizeof(T)
+            *(dstDOff as ptr<T>) = *(srcDOff as ptr<T>)
+            *((newNext as int64 + i * 8) as ptr<int64>) = this.getNext(i)
+            *((newPrev as int64 + i * 8) as ptr<int64>) = this.getPrev(i)
+        }
+        for(var j: uint64 = oldCap; j < newCapacity; j = j + 1){
+            var offN = newNext as int64 + j * 8
+            var offP = newPrev as int64 + j * 8
+            *(offN as ptr<int64>) = -1
+            *(offP as ptr<int64>) = -1
+        }
+        free this.data
+        free this.next
+        free this.prev
+        this.data = newData
+        this.next = newNext
+        this.prev = newPrev
+        this.capacity = newCapacity
+    }
+}
