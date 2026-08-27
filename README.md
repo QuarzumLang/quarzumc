@@ -26,19 +26,12 @@ function main(){
 With Quarzum installed, execute this command in a terminal:
 
 ```sh
-quarzum my-file.qz
+quarzumc my-file.qz
 ```
 
 ## Compiling the project
 
-If you don't have Quarzum installed, you must install it from the **latest release**.
-Then, in a terminal, execute the following command:
-
-```sh
-quarzum version # Ensure Quarzum is installed
-mkdir build
-quarzum src/quarzum.qz --build -o build/quarzum
-```
+To compile the project, you can use `make` on the root folder of the project. Or else, you can use `scripts/run.sh` to also delete temporal files.
 
 ## Creating a library
 
