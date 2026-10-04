@@ -17,7 +17,7 @@ trait Collection<T> {
         Returns:
             - An uint64 with the Collection size
     */
-    pure function size() : uint64
+    function size() : uint64
 
     /*
         Checks if the Collection is empty
@@ -25,7 +25,7 @@ trait Collection<T> {
         Returns:
             - true if size == 0, false otherwise
     */
-    pure function isEmpty() : bool
+    function isEmpty() : bool
 
     /*
         Adds an element to the Collection

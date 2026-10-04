@@ -34,7 +34,7 @@ function toString(c: char): string {
     Returns: 
         - "true" if boolean == true, "false" otherwise
 */
-pure function toString(boolean: bool): string {
+function toString(boolean: bool): string {
     return boolean ? "true" : "false"
 }
 

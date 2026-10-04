@@ -17,7 +17,7 @@
         abs(-3); // 3
         abs(42); // 42
 */
-pure function abs(x: int64) => x < 0? -x : x
+function abs(x: int64) => x < 0? -x : x
 
 /*
     Returns the absolute value of a float.
@@ -33,7 +33,7 @@ pure function abs(x: int64) => x < 0? -x : x
         abs(-3.5); // 3.5
         abs(0.25); // 0.25
 */
-pure function abs(x: float64) => x < 0.0? -x : x
+function abs(x: float64) => x < 0.0? -x : x
 
 /*
     Returns the largest of two integers.
@@ -48,7 +48,7 @@ pure function abs(x: float64) => x < 0.0? -x : x
     Examples:
         max(3, 7); // 7
 */
-pure function max(a: int64, b: int64) => a > b ? a : b
+function max(a: int64, b: int64) => a > b ? a : b
 
 /*
     Returns the largest of two floats.
@@ -63,7 +63,7 @@ pure function max(a: int64, b: int64) => a > b ? a : b
     Examples:
         max(3.5, 2.1); // 3.5
 */
-pure function max(a: float64, b: float64) => a > b ? a : b
+function max(a: float64, b: float64) => a > b ? a : b
 
 /*
     Returns the smallest of two integers.
@@ -78,7 +78,7 @@ pure function max(a: float64, b: float64) => a > b ? a : b
     Examples:
         min(3, 7); // 3
 */
-pure function min(a: int64, b: int64) => a < b ? a : b
+function min(a: int64, b: int64) => a < b ? a : b
 
 /*
     Returns the smallest of two floats.
@@ -93,7 +93,7 @@ pure function min(a: int64, b: int64) => a < b ? a : b
     Examples:
         min(3.5, 2.1); // 2.1
 */
-pure function min(a: float64, b: float64) => a < b ? a : b
+function min(a: float64, b: float64) => a < b ? a : b
 
 /*
     Restricts an integer to a range.
@@ -113,7 +113,7 @@ pure function min(a: float64, b: float64) => a < b ? a : b
         clamp(-5, 0, 10); // 0
         clamp(7, 0, 10);  // 7
 */
-pure function clamp(value: int64, lo: int64, hi: int64) => value < lo ? lo : value > hi ? hi : value
+function clamp(value: int64, lo: int64, hi: int64) => value < lo ? lo : value > hi ? hi : value
 
 /*
     Restricts a float to a range.
@@ -133,4 +133,4 @@ pure function clamp(value: int64, lo: int64, hi: int64) => value < lo ? lo : val
         clamp(-1.0, 0.0, 1.0); // 0.0
         clamp(2.0, 0.0, 1.0);  // 1.0
 */
-pure function clamp(value: float64, lo: float64, hi: float64) => value < lo ? lo : value > hi ? hi : value
+function clamp(value: float64, lo: float64, hi: float64) => value < lo ? lo : value > hi ? hi : value

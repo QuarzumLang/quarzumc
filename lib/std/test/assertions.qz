@@ -9,7 +9,7 @@ import "@std/io.qz"
     If the condition is false, the program exits and
     sends a message through stderr.
 */
-unsafe function assert(condition: bool, message: string){
+function assert(condition: bool, message: string){
     if(not condition){
         eprintln("Assertion failed: " + message)
         exit 134
@@ -22,7 +22,7 @@ unsafe function assert(condition: bool, message: string){
     If the condition is false, the program exits and
     sends a generic message through stderr;
 */
-unsafe function assert(condition: bool){
+function assert(condition: bool){
     if(not condition){
         eprintln("Assertion failed (No message available)")
         exit 134

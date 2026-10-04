@@ -66,7 +66,7 @@ const ACK = 6 as char
         isAlpha('a'); // true
         isAlpha('5'); // false
 */
-pure function isAlpha(c: char) => (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z')
+function isAlpha(c: char) => (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 'z')
 
 /*
     Checks if a character is an uppercase letter of the
@@ -83,7 +83,7 @@ pure function isAlpha(c: char) => (c >= 'A' and c <= 'Z') or (c >= 'a' and c <= 
         isUpper('a'); // false
         isUpper('B'); // true
 */
-pure function isUpper(c: char) => (c >= 'A' and c <= 'Z')
+function isUpper(c: char) => (c >= 'A' and c <= 'Z')
 
 /*
     Checks if a character is a lowercase letter of the
@@ -100,7 +100,7 @@ pure function isUpper(c: char) => (c >= 'A' and c <= 'Z')
         isUpper('a'); // true
         isUpper('B'); // false
 */
-pure function isLower(c: char) => (c >= 'a' and c <= 'z')
+function isLower(c: char) => (c >= 'a' and c <= 'z')
 
 /*
     Checks if a character is a decimal digit.
@@ -116,7 +116,7 @@ pure function isLower(c: char) => (c >= 'a' and c <= 'z')
         isDigit('7'); // true
         isDigit('x'); // false
 */
-pure function isDigit(c: char) => (c >= '0' and c <= '9')
+function isDigit(c: char) => (c >= '0' and c <= '9')
 
 /*
     Checks if a character is an octal digit.
@@ -132,7 +132,7 @@ pure function isDigit(c: char) => (c >= '0' and c <= '9')
         isOctalDigit('5'); // true
         isOctalDigit('8'); // false
 */
-pure function isOctalDigit(c: char) => (c >= '0' and c <= '7')
+function isOctalDigit(c: char) => (c >= '0' and c <= '7')
 
 /*
     Checks if a character is alphanumeric.
@@ -149,7 +149,7 @@ pure function isOctalDigit(c: char) => (c >= '0' and c <= '7')
         isAlphaNumeric('9'); // true
         isAlphaNumeric('_'); // false
 */
-pure function isAlphaNumeric(c: char) => isAlpha(c) or isDigit(c)
+function isAlphaNumeric(c: char) => isAlpha(c) or isDigit(c)
 
 /*
     Checks if a character is a hexadecimal digit.
@@ -166,7 +166,7 @@ pure function isAlphaNumeric(c: char) => isAlpha(c) or isDigit(c)
         isHexDigit('F'); // true
         isHexDigit('g'); // false
 */
-pure function isHexDigit(c: char) => (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
+function isHexDigit(c: char) => (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
 
 /*
     Checks if a character is a whitespace character.
@@ -182,7 +182,7 @@ pure function isHexDigit(c: char) => (c >= '0' and c <= '9') or (c >= 'a' and c 
         isSpace(' ');  // true
         isSpace('\n'); // true
 */
-pure function isSpace(c: char) => c == ' ' or c == '\n' or c == '\t'
+function isSpace(c: char) => c == ' ' or c == '\n' or c == '\t'
 
 /*
     Checks if a character is a control character.
@@ -198,7 +198,7 @@ pure function isSpace(c: char) => c == ' ' or c == '\n' or c == '\t'
         isControl('\0'); // true
         isControl('A');  // false
 */
-pure function isControl(c: char) => c <= 31 or c == 127
+function isControl(c: char) => c <= 31 or c == 127
 
 /*
     Checks if a character is a whitespace character.
@@ -214,4 +214,4 @@ pure function isControl(c: char) => c <= 31 or c == 127
         isWhitespace(' '); // true
         isWhitespace('A');  // false
 */
-pure function isWhitespace(c: char) => c == ' ' or c == '\t' or c == '\n' or c == '\v' or c == '\f' or c == '\r'
+function isWhitespace(c: char) => c == ' ' or c == '\t' or c == '\n' or c == '\v' or c == '\f' or c == '\r'

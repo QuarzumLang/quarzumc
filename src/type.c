@@ -544,64 +544,10 @@ static void check_stmt(Node* node, SymbolTable* local, SymbolTable* global);
 static bool in_constructor_check = false;
 static Type* current_return_type = NULL;
 static const char* current_func_name = NULL;
-static FunctionEffect current_function_effect = EFFECT_UNSPECIFIED;
 
 static void check_type_error(const char* msg, Node* node){
     fprintf(stderr, "type error: %s\n", msg);
     exit(1);
-}
-
-/*
-    Effect checker: validates that a function body does not exceed its
-    declared effect.
-
-    Effects form a permissiveness order:
-        pure < mutable < unsafe
-    A function may only perform operations (or call functions) whose
-    required/permitted effect is at most its own. EFFECT_UNSPECIFIED is
-    treated as EFFECT_UNSAFE (all existing Quarzum functions are
-    implicitly unsafe), so plain functions are unrestricted.
-
-      - pure:    no mutation, no free, only calls to pure functions.
-      - mutable: may mutate, but cannot free and cannot call unsafe.
-      - unsafe / unspecified: unrestricted.
-
-    Method calls are resolved during parsing, not in this pass, so they
-    are not yet covered by the call check.
-*/
-static FunctionEffect effective_function_effect(FunctionEffect e){
-    return e == EFFECT_UNSPECIFIED ? EFFECT_UNSAFE : e;
-}
-
-static const char* effect_name(FunctionEffect e){
-    switch(e){
-        case EFFECT_PURE: return "pure";
-        case EFFECT_MUTABLE: return "mutable";
-        case EFFECT_UNSAFE: return "unsafe";
-        default: return "unsafe";
-    }
-}
-
-static void check_mutation(FunctionEffect min_required, const char* msg, Node* node){
-    if(effective_function_effect(current_function_effect) < min_required){
-        fprintf(stderr, "effect error: %s function '%s' %s\n",
-                effect_name(current_function_effect),
-                current_func_name ? current_func_name : "?", msg);
-        exit(1);
-    }
-    (void)node;
-}
-
-static void check_call_effect(Node* callee, Node* call_node){
-    if(!callee) return;
-    if(effective_function_effect(callee->funcdef.effect) > effective_function_effect(current_function_effect)){
-        fprintf(stderr, "effect error: %s function '%s' calls function '%s' with a more permissive effect\n",
-                effect_name(current_function_effect),
-                current_func_name ? current_func_name : "?",
-                callee->funcdef.name);
-        exit(1);
-    }
-    (void)call_node;
 }
 
 static char* best_promoted_name;
@@ -893,7 +839,6 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
                         node->funcall.name = mangled;
                         node->ty = target->funcdef.return_type;
                         mangled = NULL;
-                        check_call_effect(target, node);
                     } else {
                         char* promoted = resolve_promoted_funcall(node->funcall.name, node->funcall.args);
                         if(promoted){
@@ -904,7 +849,6 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
                                 node->ty = ptarget->funcdef.return_type;
                                 mangled = NULL;
                                 promoted = NULL;
-                                check_call_effect(ptarget, node);
                             }
                             if(promoted) free(promoted);
                         }
@@ -931,7 +875,6 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
                             node->funcall.name = strdup(gtarget->funcdef.name);
                             node->ty = gtarget->funcdef.return_type;
                             mangled = NULL;
-                            check_call_effect(gtarget, node);
                         }
                     }
                 }
@@ -1193,7 +1136,6 @@ static void check_stmt(Node* node, SymbolTable* local, SymbolTable* global){
             check_vardecl(node, local, global);
             break;
         case ND_ASSIGN: {
-            check_mutation(EFFECT_MUTABLE, "cannot assign to a variable", node);
             Symbol* sym = check_lookup(local, global, node->assign.name);
             if(sym && sym->type && node->assign.value){
                 check_expr(node->assign.value, local, global);
@@ -1232,7 +1174,6 @@ static void check_stmt(Node* node, SymbolTable* local, SymbolTable* global){
             check_expr(node, local, global);
             break;
         case ND_MEMBER_ASSIGN:
-            check_mutation(EFFECT_MUTABLE, "cannot assign to a field", node);
             check_expr(node->member_assign.object, local, global);
             check_expr(node->member_assign.value, local, global);
             if(!in_constructor_check){
@@ -1251,7 +1192,6 @@ static void check_stmt(Node* node, SymbolTable* local, SymbolTable* global){
             }
             break;
         case ND_DEREF_ASSIGN:
-            check_mutation(EFFECT_MUTABLE, "cannot write through a pointer", node);
             check_expr(node->deref_assign.target, local, global);
             check_expr(node->deref_assign.value, local, global);
             if(node->deref_assign.target->ty && node->deref_assign.target->ty->kind != TY_PTR)
@@ -1261,7 +1201,6 @@ static void check_stmt(Node* node, SymbolTable* local, SymbolTable* global){
             check_expr(node->expr_stmt.expr, local, global);
             break;
         case ND_FREE:
-            check_mutation(EFFECT_UNSAFE, "cannot free memory", node);
             check_expr(node->free.expr, local, global);
             if(node->free.expr->ty && node->free.expr->ty->kind != TY_PTR && node->free.expr->ty->kind != TY_REF)
                 check_type_error("free requires ptr or ref operand", node);
@@ -1314,7 +1253,6 @@ void resolve_types(Node* ast){
             in_constructor_check = (strstr(child->funcdef.name, "_new_") != NULL);
             current_return_type = child->funcdef.return_type;
             current_func_name = child->funcdef.name;
-            current_function_effect = child->funcdef.effect;
             SymbolTable* local = (SymbolTable*)child->funcdef.scope;
             if(getenv("QZ_DEBUG_TY")){
                 fprintf(stderr, "[ty] checking func '%s' local=%p len=%u\n",
@@ -1343,7 +1281,6 @@ void resolve_types(Node* ast){
         if(child->type == ND_FUNCDEF && child->funcdef.body){
             current_return_type = child->funcdef.return_type;
             current_func_name = child->funcdef.name;
-            current_function_effect = child->funcdef.effect;
             in_constructor_check = (strstr(child->funcdef.name, "_new_") != NULL);
             SymbolTable* local = (SymbolTable*)child->funcdef.scope;
             check_stmts(child->funcdef.body, local, global);

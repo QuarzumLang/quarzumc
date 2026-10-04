@@ -86,35 +86,23 @@ static Token expect(ParserState* state, char* value){
 }
 
 /*
-    A statement terminator. Semicolons are NOT part of the language: statements
-    end at a newline, and the lexer inserts a synthetic ';' (auto_semi == true)
-    to mark that boundary. A user-written ';' (auto_semi == false) is a syntax
-    error. A missing terminator (e.g. before '}', ')' or EOF) is simply fine.
+    A statement terminator. A semicolon terminates the statement: either a
+    user-written ';' (auto_semi == false) or a lexer-inserted ';'
+    (auto_semi == true) at a newline boundary. A missing terminator (e.g.
+    before '}', ')' or EOF) is also fine.
 */
 static void expect_stmt_end(ParserState* state){
-    Token t = peek(state);
-    if(t.kind == TT_PUNCT && strcmp(t.value, ";") == 0){
-        if(!t.auto_semi){
-            fprintf(stderr, "parse error: semicolons are not allowed; statements end at a newline at %s:%lu:%lu\n",
-                    t.file, t.line, t.column);
-            exit(1);
-        }
+    if(equal(peek(state), ";")){
         next(state);
     }
 }
 
 /*
-    A statement-list separator. Only the lexer-inserted (auto) ';' may appear
-    here; any user-written ';' is rejected as a syntax error.
+    A statement-list separator. Any ';' (user-written or lexer-inserted) is
+    consumed here.
 */
 static void skip_semicolons(ParserState* state){
     while(equal(peek(state), ";")){
-        Token t = peek(state);
-        if(!t.auto_semi){
-            fprintf(stderr, "parse error: semicolons are not allowed; statements end at a newline at %s:%lu:%lu\n",
-                    t.file, t.line, t.column);
-            exit(1);
-        }
         next(state);
     }
 }
@@ -200,9 +188,9 @@ static Type* infer_type(Node* expr, ParserState* state);
 static Type* resolve_funcall_type(Node* node, ParserState* state);
 static Type* parse_type_base(ParserState* state);
 static Node* parse_exit_stmt(ParserState* state);
-static Node* parse_funcdef(ParserState* state, FunctionEffect effect);
+static Node* parse_funcdef(ParserState* state);
 typedef struct GenericFuncTemplate GenericFuncTemplate;
-static Node* parse_generic_func_template(ParserState* state, Token name, FunctionEffect effect);
+static Node* parse_generic_func_template(ParserState* state, Token name);
 static Type* substitute_template_type(ParserState* state, GenericFuncTemplate* tmpl, Type* tpl, Type** binds);
 static Node* instantiate_generic_func(ParserState* state, GenericFuncTemplate* tmpl, Type** type_args);
 
@@ -2107,7 +2095,6 @@ struct GenericFuncTemplate {
     int body_start;   // token index of '(' that opens the parameter list
     int body_end;     // token index just past the last body token
     char* file_dir;
-    FunctionEffect effect; // effect annotation carried to concrete instances
 };
 
 static HashMap generic_func_templates;
@@ -2487,13 +2474,11 @@ static Node* instantiate_generic_func(ParserState* state, GenericFuncTemplate* t
         fprintf(stderr, "internal error: expected 'function' in generic instantiation of '%s'\n", tmpl->name);
         exit(1);
     }
-    Node* funcdef = parse_funcdef(&sub_state, EFFECT_UNSPECIFIED);
+    Node* funcdef = parse_funcdef(&sub_state);
     if(!funcdef){
         fprintf(stderr, "internal error: failed to instantiate generic function '%s'\n", tmpl->name);
         exit(1);
     }
-    // Carry the template's effect annotation to the concrete instance.
-    funcdef->funcdef.effect = tmpl->effect;
 
     // Cache the real funcdef, replacing the placeholder.
     hashmap_put(&generic_func_instances, mangled, funcdef);
@@ -3190,30 +3175,6 @@ static AccessModifier parse_access_modifier(ParserState* state){
     return ACCESS_PUBLIC; // default
 }
 
-/*
-    Parses an optional function effect modifier: `pure`, `mutable`
-    or `unsafe`. These appear immediately before the `function`
-    keyword (`pure function add(...)`) and after any access modifier
-    (`private pure function add(...)`). They are annotations only and
-    do not alter code generation. Returns EFFECT_UNSPECIFIED when no
-    modifier is present.
-*/
-static FunctionEffect parse_function_effect(ParserState* state){
-    if(equal(peek(state), "pure")){
-        next(state);
-        return EFFECT_PURE;
-    }
-    if(equal(peek(state), "mutable")){
-        next(state);
-        return EFFECT_MUTABLE;
-    }
-    if(equal(peek(state), "unsafe")){
-        next(state);
-        return EFFECT_UNSAFE;
-    }
-    return EFFECT_UNSPECIFIED;
-}
-
 static void parse_class_body(ParserState* state, ClassDef* class_def);
 
 static char* parse_class_def(ParserState* state){
@@ -3351,7 +3312,7 @@ static char* parse_class_def(ParserState* state){
     return name.value;
 }
 
-static Node* parse_method_def(ParserState* state, char* class_name, AccessModifier access, FunctionEffect effect);
+static Node* parse_method_def(ParserState* state, char* class_name, AccessModifier access);
 
 static void parse_class_body(ParserState* state, ClassDef* class_def){
     ClassDef* prev_class = state->current_class;
@@ -3361,7 +3322,6 @@ static void parse_class_body(ParserState* state, ClassDef* class_def){
         skip_semicolons(state);
         if(equal(peek(state), "}")) break;
         AccessModifier access = parse_access_modifier(state);
-        FunctionEffect effect = parse_function_effect(state);
 
         if(equal(peek(state), "var") || equal(peek(state), "const")){
             bool is_const = equal(peek(state), "const");
@@ -3399,7 +3359,7 @@ static void parse_class_body(ParserState* state, ClassDef* class_def){
             }
         }
         else if(equal(peek(state), "function")){
-            Node* method = parse_method_def(state, class_def->name, access, effect);
+            Node* method = parse_method_def(state, class_def->name, access);
             nodelist_add(class_def->methods, method);
         }
         else {
@@ -3704,7 +3664,7 @@ ClassDef* class_template_instantiate(ParserState* state, ClassDef* template_def,
     return concrete;
 }
 
-static Node* parse_method_def(ParserState* state, char* class_name, AccessModifier access, FunctionEffect effect){
+static Node* parse_method_def(ParserState* state, char* class_name, AccessModifier access){
     expect(state, "function");
     Token mname = next(state);
     if(mname.kind != TT_IDENT && !(mname.kind == TT_KEYWORD && equal(mname, "new"))){
@@ -3817,7 +3777,6 @@ static Node* parse_method_def(ParserState* state, char* class_name, AccessModifi
     node->funcdef.scope = (void*)state->scope;
     node->funcdef.return_type = return_type;
     node->funcdef.is_extern = (body == NULL);
-    node->funcdef.effect = effect;
 
     state->scope = prev_scope;
     state->stack_offset = prev_stack_offset;
@@ -3854,7 +3813,6 @@ static void parse_trait_def(ParserState* state){
     expect(state, "{");
 
     while(!equal(peek(state), "}")){
-        FunctionEffect effect = parse_function_effect(state);
         expect(state, "function");
         Token mname = expect_ident(state);
         expect(state, "(");
@@ -3890,7 +3848,6 @@ static void parse_trait_def(ParserState* state){
         sig->funcdef.return_type = return_type;
         sig->funcdef.body = NULL;
         sig->funcdef.is_extern = true;
-        sig->funcdef.effect = effect;
         nodelist_add(trait_def->method_sigs, sig);
     }
     expect(state, "}");
@@ -3923,7 +3880,7 @@ static NodeList* parse_func_params(ParserState* state){
     return params;
 }
 
-static Node* parse_generic_func_template(ParserState* state, Token name, FunctionEffect effect){
+static Node* parse_generic_func_template(ParserState* state, Token name){
     next(state); // consume '<'
 
     int type_param_count = 0;
@@ -3951,8 +3908,6 @@ static Node* parse_generic_func_template(ParserState* state, Token name, Functio
     tmpl->type_param_count = type_param_count;
     tmpl->tokens = state->tokens;
     tmpl->file_dir = state->current_file_dir;
-    tmpl->effect = effect;
-
     if(!equal(peek(state), "(")){
         fprintf(stderr, "parse error: expected '(' for generic function '%s' at %s:%lu:%lu\n",
                 name.value, name.file, name.line, name.column);
@@ -4025,14 +3980,14 @@ static Node* parse_generic_func_template(ParserState* state, Token name, Functio
     return NULL;
 }
 
-static Node* parse_funcdef(ParserState* state, FunctionEffect effect){
+static Node* parse_funcdef(ParserState* state){
     Token name = expect_ident(state);
 
     // Generic function template: `function name<T, E>(...)`. The body is
     // stored as raw tokens and re-parsed with concrete type arguments on
     // first call (mirrors how generic class templates work).
     if(equal(peek(state), "<")){
-        return parse_generic_func_template(state, name, effect);
+        return parse_generic_func_template(state, name);
     }
 
     expect(state, "(");
@@ -4114,6 +4069,11 @@ static Node* parse_funcdef(ParserState* state, FunctionEffect effect){
         expect(state, "}");
     }
 
+    // An external declaration may end with an explicit ';'.
+    if(body == NULL && equal(peek(state), ";")){
+        next(state);
+    }
+
     Node* node = make_node(ND_FUNCDEF);
     node->funcdef.params = params;
     node->funcdef.body = body;
@@ -4121,7 +4081,6 @@ static Node* parse_funcdef(ParserState* state, FunctionEffect effect){
     node->funcdef.scope = (void*)state->scope;
     node->funcdef.return_type = return_type;
     node->funcdef.is_extern = (body == NULL);
-    node->funcdef.effect = effect;
     node->funcdef.unmangled_name = name.value;
 
     // Generate mangled name and register in function table
@@ -4277,17 +4236,7 @@ Node* parse(TokenList* tokens){
         Token t = next(&state);
         if(t.kind == TT_EOF) break;
     if(equal(t, "function")){
-        Node* fd = parse_funcdef(&state, EFFECT_UNSPECIFIED);
-        if(fd) nodelist_add(ast->program_node.children, fd);
-        state.scope = state.global_scope;
-    }
-    else if(equal(t, "pure") || equal(t, "mutable") || equal(t, "unsafe")){
-        FunctionEffect effect;
-        if(equal(t, "pure")) effect = EFFECT_PURE;
-        else if(equal(t, "mutable")) effect = EFFECT_MUTABLE;
-        else effect = EFFECT_UNSAFE;
-        expect(&state, "function");
-        Node* fd = parse_funcdef(&state, effect);
+        Node* fd = parse_funcdef(&state);
         if(fd) nodelist_add(ast->program_node.children, fd);
         state.scope = state.global_scope;
     }

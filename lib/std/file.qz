@@ -48,7 +48,7 @@ struct File {
     Examples:
         const file = fopen("file.bin", "rwb");
 */
-unsafe function fopen(path: string, mode: string) : File
+function fopen(path: string, mode: string) : File
 
 /*
     Closes a File. Do not use a File after closed,
@@ -58,7 +58,7 @@ unsafe function fopen(path: string, mode: string) : File
         - f: The File to be closed
 
 */
-unsafe function fclose(f: File)
+function fclose(f: File)
 
 /*
     Reads a File entirely as a sequence of bytes.
@@ -73,7 +73,7 @@ unsafe function fclose(f: File)
         const bytes = fread(my_file);
 
 */
-unsafe function fread(f: File) : uint8[]
+function fread(f: File) : uint8[]
 
 /*
     Writes a sequence of bytes in a File. 
@@ -85,4 +85,4 @@ unsafe function fread(f: File) : uint8[]
     Examples:
         fwrite(my_file, "Hello world!"); // The string gets converted from char[] to uint8[]
 */
-unsafe function fwrite(f: File, data: uint8[])
+function fwrite(f: File, data: uint8[])

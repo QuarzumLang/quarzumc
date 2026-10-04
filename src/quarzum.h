@@ -59,8 +59,8 @@ typedef struct {
 
     /*
         True only for the synthetic ';' tokens the lexer inserts before a
-        newline to terminate a statement. User-written ';' have this false and
-        are rejected by the parser (semicolons are not part of the language).
+        newline to terminate a statement. User-written ';' have this false.
+        Both are accepted by the parser as statement terminators.
     */
     bool auto_semi;
 
@@ -200,19 +200,6 @@ typedef enum {
     ACCESS_PROTECTED
 } AccessModifier;
 
-/*
-    Function effects (pure / mutable / unsafe annotations).
-
-    A function without an explicit annotation is implicitly unsafe.
-    EFFECT_UNSPECIFIED is treated as EFFECT_UNSAFE by the checker.
-*/
-typedef enum {
-    EFFECT_UNSPECIFIED,
-    EFFECT_PURE,
-    EFFECT_MUTABLE,
-    EFFECT_UNSAFE
-} FunctionEffect;
-
 typedef struct {
     char* name;
     Type* type;
@@ -262,7 +249,6 @@ struct Node {
             void* scope;
             Type* return_type;
             bool is_extern;
-            FunctionEffect effect;
         } funcdef;
 
         struct {

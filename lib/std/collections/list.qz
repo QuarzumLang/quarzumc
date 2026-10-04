@@ -210,21 +210,21 @@ class List<T> implements Collection<T>, Iterable<T> {
 
         Implementation of Collection.size
     */
-    pure function size() : uint64 => this.size
+    function size() : uint64 => this.size
 
     /*
         Checks if the List is empty
 
         Implementation of Collection.isEmpty
     */
-    pure function isEmpty() : bool => this.size == 0
+    function isEmpty() : bool => this.size == 0
 
     /*
         Clears the List by setting its size to 0
 
         Implementation of Collection.clear
     */
-    mutable function clear(){
+    function clear(){
         this.size = 0
     }
 
