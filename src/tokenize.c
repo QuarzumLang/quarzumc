@@ -106,7 +106,7 @@ static bool is_keyword(char* lexeme) {
             "true", "false", "or", "and", "xor", "not", "sizeof", "as",
             "alloc", "free", "pass",
             "class", "trait", "implements", "this", "new", "null",
-            "public", "private", "protected", "never"
+            "public", "private", "protected"
         };
 
         for (int i = 0; i < sizeof(kw) / sizeof(*kw); i++)

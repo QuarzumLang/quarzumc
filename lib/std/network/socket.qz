@@ -574,10 +574,9 @@ function close(socket: Socket): VoidResult {
     Arguments:
         - error: The error to report
 */
-function panic(error: SocketError): Socket {
+function panic(error: SocketError): void {
     eprintln(error.getMessage())
     exit 1
-    return Socket(0, false)
 }
 
 /*
@@ -587,10 +586,9 @@ function panic(error: SocketError): Socket {
     Arguments:
         - error: The error to report
 */
-function panicInt(error: SocketError): int64 {
+function panicInt(error: SocketError): void {
     eprintln(error.getMessage())
     exit 1
-    return 0
 }
 
 /*

@@ -578,8 +578,7 @@ typedef enum {
     TY_ARRAY,
     TY_STRUCT,
     TY_STRING,
-    TY_TYPE_PARAM,
-    TY_NEVER
+    TY_TYPE_PARAM
 } TypeKind;
 
 struct Type {

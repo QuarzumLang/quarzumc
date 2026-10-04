@@ -1,6 +1,5 @@
 #include "quarzum.h"
 
-Type *ty_never = &(Type){TY_NEVER, 0, 0};
 Type *ty_void = &(Type){TY_VOID, 0, 0};
 Type *ty_bool = &(Type){TY_BOOL, 1, 1};
 
@@ -72,8 +71,6 @@ bool is_compatible(Type* t1, Type* t2) {
         return true;
     if (!t1 || !t2)
         return false;
-
-    if(t1->kind == TY_NEVER || t2->kind == TY_NEVER) return true;
 
     if (t1->origin)
         return is_compatible(t1->origin, t2);
