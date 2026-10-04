@@ -12,7 +12,6 @@ import "@std/types/optional.qz"
 trait Iterable<T> {
     /*
         Applies a callback to each element.
-        Equivalent to foreach keyword + return the Iterable.
 
         Arguments:
             - fn: The callback to be applied. Must return void.

@@ -2830,74 +2830,6 @@ static Node* parse_for_stmt(ParserState* state){
     return node;
 }
 
-static Node* parse_foreach_stmt(ParserState* state){
-    expect(state, "(");
-    Token id = expect_ident(state);
-    expect(state, "in");
-    Node* collection = parse_expr(state);
-    expect(state, ")");
-
-    int scope_len = state->scope->length;
-
-    state->stack_offset -= 8;
-    int index_offset = state->stack_offset;
-
-    int elem_size = 8;
-    int list_offset = 0;
-    Type* elem_type = NULL;
-
-    if(collection->type == ND_VARREF){
-        Symbol* list_sym = lookup_symbol(state, collection->varref.name);
-        if(!list_sym){
-            fprintf(stderr, "parse error: undefined variable '%s'\n",
-                    collection->varref.name);
-            exit(1);
-        }
-        if(!list_sym->type || !list_sym->type->base){
-            fprintf(stderr, "parse error: '%s' is not an array\n",
-                    collection->varref.name);
-            exit(1);
-        }
-        elem_size = list_sym->type->base->size;
-        elem_type = list_sym->type->base;
-        if(list_sym->is_global){
-            state->stack_offset -= 16;
-            list_offset = state->stack_offset;
-        } else {
-            list_offset = list_sym->offset;
-        }
-    } else {
-        Type* coll_type = infer_type(collection, state);
-        if(coll_type && coll_type->base){
-            elem_size = coll_type->base->size;
-            elem_type = coll_type->base;
-        }
-        state->stack_offset -= 16;
-        list_offset = state->stack_offset;
-    }
-
-    int id_alloc = elem_size > 8 ? elem_size : 8;
-    state->stack_offset -= id_alloc;
-    int id_offset = state->stack_offset;
-
-    Symbol id_sym = { .name = id.value, .type = elem_type, .offset = id_offset, .is_const = false };
-    symbol_table_add(state->scope, id_sym);
-
-    NodeList* body = parse_optional_block(state);
-
-    state->scope->length = scope_len;
-
-    Node* node = make_node(ND_FOREACH);
-    node->foreach.list_offset = list_offset;
-    node->foreach.id_offset = id_offset;
-    node->foreach.index_offset = index_offset;
-    node->foreach.elem_size = elem_size;
-    node->foreach.collection = collection;
-    node->foreach.id_name = strdup(id.value);
-    node->foreach.body = body;
-    return node;
-}
-
 static Node* parse_switch_stmt(ParserState* state){
     expect(state, "(");
     Node* scrutinee = parse_expr(state);
@@ -2979,9 +2911,6 @@ static Node* parse_stmt(ParserState* state){
     }
     if(equal(t, "for")){
         return parse_for_stmt(state);
-    }
-    if(equal(t, "foreach")){
-        return parse_foreach_stmt(state);
     }
     if(equal(t, "var")){
         return parse_vardecl(state, false, false, true);

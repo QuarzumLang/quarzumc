@@ -110,7 +110,6 @@ typedef enum {
     ND_PARAM,
     ND_STRING_EQ,
     ND_STRING_NE,
-    ND_FOREACH,
     ND_MEMBER,
     ND_ENUMDEF,
     ND_STRUCTDEF,
@@ -354,16 +353,6 @@ struct Node {
             Node* lhs;
             Node* rhs;
         } string_cmp;
-
-        struct {
-            int list_offset;
-            int id_offset;
-            int index_offset;
-            int elem_size;
-            Node* collection;
-            char* id_name;
-            NodeList* body;
-        } foreach;
 
         struct {
             Node* base;

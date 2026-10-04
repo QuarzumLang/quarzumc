@@ -101,7 +101,7 @@ static bool is_keyword(char* lexeme) {
             "uint8", "uint16", "uint32", "uint64", "uint",
             "float32", "float64", "float",
             "enum", "struct",
-            "if", "else", "for", "foreach", "in", "while", "do",
+            "if", "else", "for", "in", "while", "do",
             "switch", "match", "import", "case", "default", "break", "continue",
             "true", "false", "or", "and", "xor", "not", "sizeof", "as",
             "alloc", "free", "pass",

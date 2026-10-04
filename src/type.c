@@ -1087,7 +1087,7 @@ static void check_vardecl(Node* node, SymbolTable* local, SymbolTable* global){
         }
     }
 
-    // Variables declared inside for/foreach bodies (and for-loop inits) are
+    // Variables declared inside for bodies (and for-loop inits) are
     // removed from the symbol table when the loop scope is closed during
     // parsing, so later varrefs cannot resolve their type. Re-register them
     // with the resolved type; otherwise codegen falls back to 8-byte
@@ -1204,22 +1204,6 @@ static void check_stmt(Node* node, SymbolTable* local, SymbolTable* global){
             check_expr(node->free.expr, local, global);
             if(node->free.expr->ty && node->free.expr->ty->kind != TY_PTR && node->free.expr->ty->kind != TY_REF)
                 check_type_error("free requires ptr or ref operand", node);
-            break;
-        case ND_FOREACH:
-            if(node->foreach.collection){
-                check_expr(node->foreach.collection, local, global);
-                Type* ct = node->foreach.collection->ty;
-                if(ct && ct->base){
-                    node->foreach.elem_size = ct->base->size;
-                    if(node->foreach.id_name && !check_lookup(local, global, node->foreach.id_name)){
-                        Symbol loop_sym = { .name = node->foreach.id_name, .type = ct->base,
-                                            .offset = node->foreach.id_offset, .is_const = false };
-                        symbol_table_add(local, loop_sym);
-                    }
-                }
-            }
-            if(node->foreach.body)
-                check_stmts(node->foreach.body, local, global);
             break;
         case ND_MATCH:
             check_expr(node, local, global);
