@@ -836,6 +836,26 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
                         }
                     }
                     if(mangled){
+                        // C FFI fallback: a bare-name function registered by
+                        // an `extern function` declaration (`strlen`, `malloc`).
+                        Node* ctarget = function_table_lookup(node->funcall.name);
+                        if(ctarget && ctarget->funcdef.is_c_extern){
+                            int param_count = (int)ctarget->funcdef.params->length;
+                            int arg_count = (int)node->funcall.args->length;
+                            int arity_ok = ctarget->funcdef.is_variadic
+                                         ? (arg_count >= param_count)
+                                         : (arg_count == param_count);
+                            if(!arity_ok){
+                                check_type_error("wrong number of arguments in call to extern function", node);
+                            }
+                            node->funcall.is_c_call = true;
+                            node->funcall.c_func = ctarget;
+                            node->ty = ctarget->funcdef.return_type;
+                            free(mangled);
+                            mangled = NULL;
+                        }
+                    }
+                    if(mangled){
                         // Generic function template fallback: instantiate from
                         // the already-resolved argument types (check_expr runs
                         // after parsing, so every arg type is known here).

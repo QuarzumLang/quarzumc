@@ -261,6 +261,11 @@ struct Node {
             void* scope;
             Type* return_type;
             bool is_extern;
+            // C FFI: an `extern function` declaration. `name` holds the C
+            // symbol and the call follows the System V AMD64 ABI.
+            bool is_c_extern;
+            // Trailing `...` in an `extern` declaration.
+            bool is_variadic;
         } funcdef;
 
         struct {
@@ -271,6 +276,9 @@ struct Node {
         struct {
             char* name;
             NodeList* args;
+            // Set by the checker when this call targets an `extern` C function.
+            bool is_c_call;
+            void* c_func;
         } funcall;
 
         struct {
@@ -591,10 +599,15 @@ Symbol* symbol_table_lookup(SymbolTable* table, const char* name);
 
 Token next(ParserState* state);
 Node* parse(TokenList* tokens);
+// True if any `extern function` (C FFI) declaration was parsed.
+bool program_uses_c_externs(void);
 
 // codegen.c
 
 void codegen(const Node* ast, FILE* output_file);
+// When enabled, program termination calls libc's `exit` (so stdio buffers are
+// flushed) instead of the raw exit syscall.
+void codegen_set_use_libc(bool use_libc);
 
 // type.c
 
@@ -735,6 +748,12 @@ Node* resolve_generic_funcall_types(ParserState* state, const char* name, Type**
 Node* instantiate_generic_func_for_types(ParserState* state, const char* name, Type** arg_types, int arg_count);
 void append_generic_funcs_to_ast(Node* ast);
 
+// Project root used to resolve `@dependency/...` imports to `deps/<name>/`.
+void set_project_root(const char* root);
+// Dependency names declared in the project manifest. When set, `@<name>/...`
+// imports must reference a declared dependency.
+void set_project_dependencies(char** names, int count);
+
 // Global enum definitions table
 extern HashMap enum_definitions;
 void enum_table_init(void);
@@ -774,6 +793,37 @@ void resolve_funcref_expected(Node* node, Type* expected);
 // string.c
 bool starts_with(const char* str, const char* lexeme);
 bool ends_with(char* str, const char* lexeme);
+
+// manifest.c
+typedef struct {
+    char* name;
+    char* version;
+} ManifestDependency;
+
+typedef struct {
+    char* name;
+    char* version;
+    char* description;
+    char* license;
+    // [build]
+    char* entry;
+    // [build] libc = true links against the C library (dynamic) and routes
+    // program termination through libc's `exit`.
+    bool libc;
+    // [build] link = ["m", "pthread"] adds extra native libraries.
+    char** links;
+    int link_count;
+    // [dependencies] and [dev-dependencies]
+    ManifestDependency* dependencies;
+    int dependency_count;
+    ManifestDependency* dev_dependencies;
+    int dev_dependency_count;
+} Manifest;
+
+// Loads and validates a `manifest.toml`. Returns NULL (after printing an
+// error) when the file is missing or malformed.
+Manifest* manifest_load(const char* path);
+void manifest_free(Manifest* manifest);
 
 // tokenize.c
 uint64_t unescaped_string_length(const char* s);

@@ -52,11 +52,80 @@ static char* normalize_path(const char* path){
     return result;
 }
 
+// Project root for `@dependency/...` imports (set in project mode).
+static char* quarzum_project_root = NULL;
+// Declared dependency names (project mode). NULL means "no manifest", i.e. the
+// legacy behaviour where any `@...` import resolves inside LIB_PATH.
+static char** quarzum_project_dependencies = NULL;
+static int quarzum_project_dependency_count = 0;
+
+void set_project_root(const char* root){
+    free(quarzum_project_root);
+    quarzum_project_root = root ? strdup(root) : NULL;
+}
+
+void set_project_dependencies(char** names, int count){
+    quarzum_project_dependencies = names;
+    quarzum_project_dependency_count = count;
+}
+
+static bool dependency_declared(const char* name){
+    for(int i = 0; i < quarzum_project_dependency_count; i++){
+        if(strcmp(quarzum_project_dependencies[i], name) == 0) return true;
+    }
+    return false;
+}
+
+static bool path_exists(const char* path){
+    struct stat st;
+    return stat(path, &st) == 0;
+}
+
+// Extracts the dependency name (the first path segment) from `@name/rest`.
+static void dependency_name(const char* rest, char* out, size_t out_size){
+    size_t i = 0;
+    while(rest[i] && rest[i] != '/' && i + 1 < out_size){
+        out[i] = rest[i];
+        i++;
+    }
+    out[i] = '\0';
+}
+
 static char* resolve_import_path(ParserState* state, const char* raw_path){
     if(raw_path[0] == '@'){
-        char* rel = malloc(strlen(LIB_PATH) + 1 + strlen(raw_path));
-        sprintf(rel, "%s/%s", LIB_PATH, raw_path + 1);
-        return rel;
+        const char* rest = raw_path + 1;
+        if(!quarzum_project_root){
+            // Single-file mode: everything comes from the compiler library.
+            char* rel = malloc(strlen(LIB_PATH) + 1 + strlen(rest) + 1);
+            sprintf(rel, "%s/%s", LIB_PATH, rest);
+            return rel;
+        }
+
+        // Project mode: the dependency must be declared in the manifest.
+        char name[256];
+        dependency_name(rest, name, sizeof(name));
+        if(!dependency_declared(name)){
+            fprintf(stderr, "error: dependency '%s' is not declared in manifest.toml (import \"%s\")\n",
+                    name, raw_path);
+            exit(1);
+        }
+
+        // Prefer a vendored copy under deps/<name>/.
+        char* candidate = malloc(strlen(quarzum_project_root) + 6 + strlen(rest) + 1);
+        sprintf(candidate, "%s/deps/%s", quarzum_project_root, rest);
+        if(path_exists(candidate)) return candidate;
+        free(candidate);
+
+        // `std` falls back to the standard library shipped with the compiler.
+        if(strcmp(name, "std") == 0){
+            char* rel = malloc(strlen(LIB_PATH) + 1 + strlen(rest) + 1);
+            sprintf(rel, "%s/%s", LIB_PATH, rest);
+            return rel;
+        }
+
+        fprintf(stderr, "error: dependency '%s' not found in deps/ (import \"%s\")\n",
+                name, raw_path);
+        exit(1);
     }
     char* result = malloc(strlen(state->current_file_dir) + 1 + strlen(raw_path) + 1);
     sprintf(result, "%s/%s", state->current_file_dir, raw_path);
@@ -3879,6 +3948,13 @@ static HashMap generic_class_instances;
 static HashMap imported_files;
 static SymbolTable* shared_global_scope;
 
+// Number of `extern function` (C FFI) declarations seen while parsing.
+static int c_extern_count = 0;
+
+bool program_uses_c_externs(void){
+    return c_extern_count > 0;
+}
+
 char* make_mangled_name(const char* class_name, Type** type_args, int type_arg_count){
     char* result = malloc(strlen(class_name) + 2);
     strcpy(result, class_name);
@@ -4687,6 +4763,73 @@ Type* parse_type_string(const char* str, ParserState* state, const char* filenam
     return ty;
 }
 
+static void parse_extern_funcdef(ParserState* state){
+    expect(state, "function");
+    Token name = expect_ident(state);
+    expect(state, "(");
+
+    NodeList* params = make_nodelist();
+    bool variadic = false;
+    if(!equal(peek(state), ")")){
+        while(true){
+            if(equal(peek(state), "...")){
+                next(state);
+                variadic = true;
+                break;
+            }
+            Token pname = expect_ident(state);
+            expect(state, ":");
+            Type* ptype = parse_type(state);
+
+            Node* param = make_node(ND_PARAM);
+            param->param.name = pname.value;
+            param->param.type = ptype;
+            nodelist_add(params, param);
+
+            if(!equal(peek(state), ",")) break;
+            next(state);
+        }
+    }
+    expect(state, ")");
+
+    Type* return_type = ty_void;
+    if(equal(peek(state), ":")){
+        next(state);
+        return_type = parse_type(state);
+    }
+
+    // Optional C-symbol override: `extern function libcFree(p: ptr<uint8>) = "free"`.
+    // Lets a declaration bind a callable Quarzum name to any C symbol,
+    // including ones that collide with language keywords (`free`).
+    char* c_symbol = name.value;
+    if(equal(peek(state), "=")){
+        next(state);
+        Token sym = next(state);
+        if(sym.kind != TT_STR){
+            fprintf(stderr, "parse error: expected string C symbol after '=' at %s:%lu:%lu\n",
+                    sym.file, sym.line, sym.column);
+            exit(1);
+        }
+        c_symbol = sym.string_value;
+    }
+    expect_stmt_end(state);
+
+    Node* node = make_node(ND_FUNCDEF);
+    // `name` is the emitted (C) symbol; the declaration is registered under the
+    // Quarzum-visible name so call sites resolve to it.
+    node->funcdef.name = strdup(c_symbol);
+    node->funcdef.unmangled_name = name.value;
+    node->funcdef.params = params;
+    node->funcdef.return_type = return_type;
+    node->funcdef.body = NULL;
+    node->funcdef.is_extern = true;
+    node->funcdef.is_c_extern = true;
+    node->funcdef.is_variadic = variadic;
+    node->funcdef.stack_size = 0;
+    c_extern_count++;
+    function_table_add(name.value, node);
+}
+
 Node* parse(TokenList* tokens){
     ParserState state = {0};
     if(!imported_files.buckets)
@@ -4732,6 +4875,9 @@ Node* parse(TokenList* tokens){
         if(fd) nodelist_add(ast->program_node.children, fd);
         state.scope = state.global_scope;
     }
+        else if(equal(t, "extern")){
+            parse_extern_funcdef(&state);
+        }
         else if(equal(t, "enum")){
             parse_enum_def(&state);
         }

@@ -13,6 +13,7 @@ Welcome to Quarzum, a compiled general programming language.
 * Interfaces via `trait` + `implements` (no inheritance)
 * Built-in memory allocation keywords (`new` / `free`)
 * Memory ownership and security in compile-time
+* C interoperability: call libc and other native libraries via `extern function`
 
 ## How to run a Quarzum file
 

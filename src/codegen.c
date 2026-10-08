@@ -4,6 +4,13 @@ static uint64_t label_count = 0;
 static HashMap strlit_table;
 // Set when @std/process globals (qz_argc/qz_argv/qz_envp) are present.
 static bool g_emit_process_globals = false;
+// When true the program is linked against libc; termination then goes through
+// libc's `exit` so stdio buffers are flushed.
+static bool g_use_libc = false;
+
+void codegen_set_use_libc(bool use_libc){
+    g_use_libc = use_libc;
+}
 
 static Node* pending_global_init[256];
 static int pending_global_init_count = 0;
@@ -114,6 +121,83 @@ static void gen_float_to_int(Node* node, FILE* output_file, Type* from){
 }
 
 static void gen_expr(Node* node, FILE* output_file, CodegenState* state);
+
+// Emits a call to an `extern` C function following the System V AMD64 ABI:
+// integer/pointer arguments go in rdi, rsi, rdx, rcx, r8, r9 and floating
+// point arguments in xmm0-xmm7. `al` is set to the number of vector registers
+// used so variadic functions (printf) work. The stack is 16-byte aligned
+// around the call.
+static void gen_ccall(Node* node, FILE* output_file, CodegenState* state){
+    Node* fn = (Node*)node->funcall.c_func;
+    if(fn && fn->funcdef.return_type && fn->funcdef.return_type->kind == TY_STRUCT){
+        fprintf(stderr, "codegen error: returning a struct by value from C function '%s' is not supported\n",
+                fn->funcdef.name);
+        exit(1);
+    }
+    NodeList* args = node->funcall.args;
+    int n = (int)args->length;
+    int area = ((n * 8) + 15) & ~15;
+
+    if(area > 0) fprintf(output_file, "    sub rsp, %d\n", area);
+
+    // Evaluate every argument into its own slot at [rsp + i*8].
+    for(int i = 0; i < n; i++){
+        gen_expr(args->nodes[i], output_file, state);
+        if(node_is_float(args->nodes[i])){
+            fprintf(output_file, "    movsd [rsp+%d], xmm0\n", i * 8);
+        } else {
+            fprintf(output_file, "    mov [rsp+%d], rax\n", i * 8);
+        }
+    }
+
+    // Build a 16-byte aligned call frame. The argument slots live above the
+    // saved rbp (at [rbp+8 + i*8]) so they stay reachable after alignment.
+    fprintf(output_file, "    push rbp\n");
+    fprintf(output_file, "    mov rbp, rsp\n");
+    fprintf(output_file, "    and rsp, -16\n");
+
+    static const char* iregs[6] = {"rdi", "rsi", "rdx", "rcx", "r8", "r9"};
+    int ii = 0, si = 0;
+    for(int i = 0; i < n; i++){
+        Type* ty = NULL;
+        if(fn && i < (int)fn->funcdef.params->length)
+            ty = fn->funcdef.params->nodes[i]->param.type;
+        else
+            ty = args->nodes[i]->ty;
+        int slot = (i + 1) * 8;
+        if(ty && ty->kind == TY_STRUCT){
+            fprintf(stderr, "codegen error: struct argument passed by value to C function '%s' is not supported\n",
+                    fn ? fn->funcdef.name : node->funcall.name);
+            exit(1);
+        }
+        if(ty && is_float(ty)){
+            if(si >= 8){
+                fprintf(stderr, "codegen error: too many floating arguments in C call to '%s'\n",
+                        fn ? fn->funcdef.name : node->funcall.name);
+                exit(1);
+            }
+            fprintf(output_file, "    movsd xmm%d, [rbp+%d]\n", si, slot);
+            if(ty->kind == TY_FLOAT32)
+                fprintf(output_file, "    cvtsd2ss xmm%d, xmm%d\n", si, si);
+            si++;
+        } else {
+            if(ii >= 6){
+                fprintf(stderr, "codegen error: too many integer arguments in C call to '%s'\n",
+                        fn ? fn->funcdef.name : node->funcall.name);
+                exit(1);
+            }
+            fprintf(output_file, "    mov %s, [rbp+%d]\n", iregs[ii], slot);
+            ii++;
+        }
+    }
+
+    fprintf(output_file, "    mov al, %d\n", si);
+    fprintf(output_file, "    call %s\n", fn ? fn->funcdef.name : node->funcall.name);
+
+    fprintf(output_file, "    mov rsp, rbp\n");
+    fprintf(output_file, "    pop rbp\n");
+    if(area > 0) fprintf(output_file, "    add rsp, %d\n", area);
+}
 
 static void gen_string_compare(bool is_eq, Node* lhs, Node* rhs,
                                FILE* output_file, CodegenState* state){
@@ -903,6 +987,10 @@ static void gen_expr(Node* node, FILE* output_file, CodegenState* state){
         return;
     }
     if(node->type == ND_FUNCCALL){
+        if(node->funcall.is_c_call){
+            gen_ccall(node, output_file, state);
+            return;
+        }
         if(strcmp(node->funcall.name, "fopen_array_array") == 0 && node->funcall.args->length == 2){
             uint64_t id = label_count++;
             gen_expr(node->funcall.args->nodes[1], output_file, state);
@@ -1818,8 +1906,14 @@ static void gen_stmt(Node* node, FILE* output_file, CodegenState* state){
         fprintf(output_file, "    push rdi\n");
         gen_pending_defers(output_file, state, 0);
         fprintf(output_file, "    pop rdi\n");
-        fprintf(output_file, "    mov rax, 60\n");
-        fprintf(output_file, "    syscall\n");
+        if(g_use_libc){
+            // libc `exit` runs stdio cleanup (flushes printf buffers).
+            fprintf(output_file, "    and rsp, -16\n");
+            fprintf(output_file, "    call exit\n");
+        } else {
+            fprintf(output_file, "    mov rax, 60\n");
+            fprintf(output_file, "    syscall\n");
+        }
         return;
     }
     if(node->type == ND_DEFER){
@@ -1917,8 +2011,13 @@ static void gen_stmt(Node* node, FILE* output_file, CodegenState* state){
         fprintf(output_file, "    mov rsp, rbp\n");
         fprintf(output_file, "    pop rbp\n");
         if(state->is_main){
-            fprintf(output_file, "    mov rax, 60\n");
-            fprintf(output_file, "    syscall\n");
+            if(g_use_libc){
+                fprintf(output_file, "    and rsp, -16\n");
+                fprintf(output_file, "    call exit\n");
+            } else {
+                fprintf(output_file, "    mov rax, 60\n");
+                fprintf(output_file, "    syscall\n");
+            }
         } else {
             fprintf(output_file, "    ret\n");
         }
@@ -2268,8 +2367,13 @@ static void gen_funcdef(Node* node, FILE* output_file){
     } else if(is_main && !ends_with_return && !ends_with_exit){
         fprintf(output_file, "    mov rax, 0\n");
         fprintf(output_file, "    mov rdi, rax\n");
-        fprintf(output_file, "    mov rax, 60\n");
-        fprintf(output_file, "    syscall\n");
+        if(g_use_libc){
+            fprintf(output_file, "    and rsp, -16\n");
+            fprintf(output_file, "    call exit\n");
+        } else {
+            fprintf(output_file, "    mov rax, 60\n");
+            fprintf(output_file, "    syscall\n");
+        }
     }
 }
 

@@ -107,6 +107,7 @@ static bool is_keyword(char* lexeme) {
             "true", "false", "or", "and", "xor", "not", "sizeof", "as",
             "free", "pass",
             "trait", "implements", "this", "new", "null",
+            "extern",
             "public", "private", "protected"
         };
 
@@ -488,7 +489,7 @@ TokenList* tokenize_file(File* f){
         }
 
         static char *symbols[] = {
-            ";", "(", ")", "[", "]", "{", "}", ":", ",", ".", "?",
+            ";", "(", ")", "[", "]", "{", "}", ":", ",", "...", ".", "?",
             "=>", "==", "!=", "<=", ">=", "+=", "-=", "*=", "/=", "%=",
             "&&=", "||=", "^^=", "!!=", "&&", "||", "^^", "!!",
             "=", "<", ">", "+", "-", "*", "/", "%", "&"
