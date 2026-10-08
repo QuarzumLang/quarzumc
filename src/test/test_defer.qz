@@ -1,0 +1,39 @@
+// Exercises defer: LIFO order, block scope, and early exits.
+
+var trace: int64 = 0
+
+function lifo(): int64 {
+    defer trace = trace * 10 + 1
+    defer trace = trace * 10 + 2
+    defer trace = trace * 10 + 3
+    return 7
+}
+
+function blockScope(): int64 {
+    var x: int64 = 0
+    if(true) {
+        defer x = x + 10
+        x = 1
+    }
+    return x
+}
+
+function loopDefers(): int64 {
+    var sum: int64 = 0
+    var i: int64 = 0
+    while(i < 5) {
+        i = i + 1
+        defer sum = sum + i
+        if(i == 3) { continue }
+        if(i == 5) { break }
+    }
+    return sum
+}
+
+function main() {
+    var r = lifo()          // r = 7, trace = 321
+    var b = blockScope()    // b = 11
+    var s = loopDefers()    // s = 15
+    if(r * 1000 + trace + b + s == 7347) return 0
+    return 1
+}

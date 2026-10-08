@@ -1,0 +1,26 @@
+import "@std/collections/list.qz"
+import "@std/collections/iter.qz"
+import "@std/core/option.qz"
+
+function main() {
+    var xs = new List<int64>()
+    defer xs.release()
+    xs.add(10)
+    xs.add(20)
+    xs.add(30)
+
+    var it = iterate(xs)
+    if(not it.hasNext()) return 1
+    if(unwrap(it.next()) != 10) return 1
+    if(unwrap(it.next()) != 20) return 1
+    if(iterCount(&it) != 1) return 1
+    if(isSome(it.next())) return 1
+
+    var it2 = iterate(xs)
+    var collected = iterCollect(&it2)
+    defer collected.release()
+    if(collected.size() != 3) return 1
+    if(collected.getUnchecked(2) != 30) return 1
+
+    return 0
+}

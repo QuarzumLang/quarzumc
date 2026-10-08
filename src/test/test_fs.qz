@@ -1,0 +1,47 @@
+// Filesystem: create/remove dirs, write/read/append/rename files.
+
+import "@std/fs/fs.qz"
+import "@std/core/result.qz"
+
+function main() {
+    var dir = "/tmp/opencode/qv_fs_test"
+    var file = "/tmp/opencode/qv_fs_test/a.txt"
+    var moved = "/tmp/opencode/qv_fs_test/b.txt"
+
+    if(exists(file)) removeFile(file)
+    if(exists(moved)) removeFile(moved)
+    if(exists(dir)) removeDir(dir)
+
+    if(not makeDir(dir)) return 1
+    if(not isDir(dir)) return 1
+    if(isFile(dir)) return 1
+
+    if(not writeFile(file, "hello fs")) return 1
+    if(not isFile(file)) return 1
+
+    var r = readFile(file)
+    if(isErr(r)) return 1
+    var data = unwrap(r)
+    if(data != "hello fs") return 1
+    free data.ptr
+
+    if(not appendFile(file, "!")) return 1
+    var r2 = readFile(file)
+    var data2 = unwrap(r2)
+    if(data2 != "hello fs!") return 1
+    free data2.ptr
+
+    if(not rename(file, moved)) return 1
+    if(exists(file)) return 1
+    if(not exists(moved)) return 1
+
+    if(not removeFile(moved)) return 1
+    if(not removeDir(dir)) return 1
+    if(exists(dir)) return 1
+
+    var cwd = currentDir()
+    if(cwd.length == 0) return 1
+    free cwd.ptr
+
+    return 0
+}

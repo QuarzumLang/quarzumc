@@ -59,7 +59,7 @@
 
         var buffer: char[];
         buffer.length = 256;
-        buffer.ptr = alloc char[256];
+        buffer.ptr = new char[256];
         const n = expectCount(read(client, buffer));
         if(n > 0) {
             buffer.length = n;
@@ -258,11 +258,11 @@ struct Socket {
                 E* constants)
         - message: A human readable description of the error
 */
-class SocketError implements Error {
+struct SocketError implements Error {
     var code: int64
     var message: string
 
-    function new(code: int64) {
+    function SocketError(code: int64) {
         this.code = code
         this.message = errorMessage(code)
     }
@@ -367,7 +367,7 @@ function validByte(value: int64): bool {
 function makeAddress(port: int64, a: int64, b: int64, c: int64, d: int64): char[] {
     var address: char[]
     address.length = 16
-    address.ptr = alloc char[16]
+    address.ptr = new char[16]
     var base = address.ptr as int64
     // sin_family = AF_INET
     *((base + 0) as ptr<char>) = AF_INET as char
@@ -379,7 +379,7 @@ function makeAddress(port: int64, a: int64, b: int64, c: int64, d: int64): char[
     *((base + 5) as ptr<char>) = b as char
     *((base + 6) as ptr<char>) = c as char
     *((base + 7) as ptr<char>) = d as char
-    // The remaining 8 bytes (sin_zero) are already zeroed by alloc.
+    // The remaining 8 bytes (sin_zero) are already zeroed by new.
     return address
 }
 
@@ -395,7 +395,7 @@ function makeAddress(port: int64, a: int64, b: int64, c: int64, d: int64): char[
 */
 function openStream(): SocketResult {
     const fd = socketCreate(AF_INET, SOCK_STREAM, 0)
-    if(fd < 0) return SocketResult.Err(new SocketError(fd))
+    if(fd < 0) return SocketResult.Err(SocketError(fd))
     return SocketResult.Ok(Socket(fd, true))
 }
 
@@ -408,7 +408,7 @@ function openStream(): SocketResult {
 */
 function openDatagram(): SocketResult {
     const fd = socketCreate(AF_INET, SOCK_DGRAM, 0)
-    if(fd < 0) return SocketResult.Err(new SocketError(fd))
+    if(fd < 0) return SocketResult.Err(SocketError(fd))
     return SocketResult.Ok(Socket(fd, true))
 }
 
@@ -424,10 +424,10 @@ function openDatagram(): SocketResult {
         - port: The port to listen on, from 0 to 65535
 */
 function bind(socket: Socket, port: int64): VoidResult {
-    if(not validPort(port)) return VoidResult.Err(new SocketError(EINVAL))
+    if(not validPort(port)) return VoidResult.Err(SocketError(EINVAL))
     const address = makeAddress(port, 0, 0, 0, 0)
     const result = socketBind(socket.fd, address)
-    if(result < 0) return VoidResult.Err(new SocketError(result))
+    if(result < 0) return VoidResult.Err(SocketError(result))
     return VoidResult.Ok
 }
 
@@ -445,7 +445,7 @@ function bind(socket: Socket, port: int64): VoidResult {
 */
 function listen(socket: Socket, backlog: int64): VoidResult {
     const result = socketListen(socket.fd, backlog)
-    if(result < 0) return VoidResult.Err(new SocketError(result))
+    if(result < 0) return VoidResult.Err(SocketError(result))
     return VoidResult.Ok
 }
 
@@ -462,7 +462,7 @@ function listen(socket: Socket, backlog: int64): VoidResult {
 */
 function accept(socket: Socket): SocketResult {
     const fd = socketAccept(socket.fd)
-    if(fd < 0) return SocketResult.Err(new SocketError(fd))
+    if(fd < 0) return SocketResult.Err(SocketError(fd))
     return SocketResult.Ok(Socket(fd, true))
 }
 
@@ -479,14 +479,14 @@ function accept(socket: Socket): SocketResult {
         - a, b, c, d: The four bytes of the remote IPv4 address
 */
 function connect(socket: Socket, port: int64, a: int64, b: int64, c: int64, d: int64): VoidResult {
-    if(not validPort(port)) return VoidResult.Err(new SocketError(EINVAL))
-    if(not validByte(a)) return VoidResult.Err(new SocketError(EINVAL))
-    if(not validByte(b)) return VoidResult.Err(new SocketError(EINVAL))
-    if(not validByte(c)) return VoidResult.Err(new SocketError(EINVAL))
-    if(not validByte(d)) return VoidResult.Err(new SocketError(EINVAL))
+    if(not validPort(port)) return VoidResult.Err(SocketError(EINVAL))
+    if(not validByte(a)) return VoidResult.Err(SocketError(EINVAL))
+    if(not validByte(b)) return VoidResult.Err(SocketError(EINVAL))
+    if(not validByte(c)) return VoidResult.Err(SocketError(EINVAL))
+    if(not validByte(d)) return VoidResult.Err(SocketError(EINVAL))
     const address = makeAddress(port, a, b, c, d)
     const result = socketConnect(socket.fd, address)
-    if(result < 0) return VoidResult.Err(new SocketError(result))
+    if(result < 0) return VoidResult.Err(SocketError(result))
     return VoidResult.Ok
 }
 
@@ -509,7 +509,7 @@ function connect(socket: Socket, port: int64, a: int64, b: int64, c: int64, d: i
 */
 function read(socket: Socket, buffer: char[]): CountResult {
     const result = socketRead(socket.fd, buffer)
-    if(result < 0) return CountResult.Err(new SocketError(result))
+    if(result < 0) return CountResult.Err(SocketError(result))
     return CountResult.Ok(result)
 }
 
@@ -526,7 +526,7 @@ function read(socket: Socket, buffer: char[]): CountResult {
 */
 function write(socket: Socket, data: char[]): CountResult {
     const result = socketWrite(socket.fd, data)
-    if(result < 0) return CountResult.Err(new SocketError(result))
+    if(result < 0) return CountResult.Err(SocketError(result))
     return CountResult.Ok(result)
 }
 
@@ -543,7 +543,7 @@ function write(socket: Socket, data: char[]): CountResult {
 */
 function shutdown(socket: Socket, how: int64): VoidResult {
     const result = socketShutdown(socket.fd, how)
-    if(result < 0) return VoidResult.Err(new SocketError(result))
+    if(result < 0) return VoidResult.Err(SocketError(result))
     return VoidResult.Ok
 }
 
@@ -562,7 +562,7 @@ function shutdown(socket: Socket, how: int64): VoidResult {
 */
 function close(socket: Socket): VoidResult {
     const result = socketClose(socket.fd)
-    if(result < 0) return VoidResult.Err(new SocketError(result))
+    if(result < 0) return VoidResult.Err(SocketError(result))
     socket.isOpen = false
     return VoidResult.Ok
 }

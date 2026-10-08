@@ -1,0 +1,57 @@
+import "@std/string.qz"
+import "@std/text/parse.qz"
+import "@std/core/option.qz"
+
+function main() {
+    // Conversions
+    if(toString(42 as uint64) != "42") return 1
+    if(toString(-7 as int64) != "-7") return 1
+    if(toString(true) != "true") return 1
+    if(toString('A') != "A") return 1
+
+    // Predicates and views
+    var s = "Hello, World"
+    if(s.length != 12) return 1
+    if(not startsWith(s, "Hello")) return 1
+    if(not endsWith(s, "World")) return 1
+    if(substring(s, 0, 5) != "Hello") return 1
+
+    var copy = slice(s, 7, 5)
+    if(copy != "World") return 1
+    free copy.ptr
+
+    if(not contains(s, "o, W")) return 1
+    var idx = indexOf(s, "World")
+    if(not isSome(idx) || unwrap(idx) != 7) return 1
+
+    var c = charAt(s, 1)
+    if(not isSome(c) || unwrap(c) != 'e') return 1
+
+    if(trim("  hi  ") != "hi") return 1
+
+    var up = toUpperCase("abc")
+    if(up != "ABC") return 1
+    free up.ptr
+    var lo = toLowerCase("ABC")
+    if(lo != "abc") return 1
+    free lo.ptr
+
+    if(not equals("x", "x")) return 1
+    if(concat("a", "b") != "ab") return 1
+
+    // Checked parsing
+    var n = parseInt("-123")
+    if(not isSome(n) || unwrap(n) != -123) return 1
+    var u = parseUInt("456")
+    if(not isSome(u) || unwrap(u) != 456) return 1
+    var f = parseFloat("3.5")
+    if(not isSome(f)) return 1
+    var fv = unwrap(f)
+    if(fv < 3.4 or fv > 3.6) return 1
+
+    if(isSome(parseInt("12x"))) return 1
+    if(isSome(parseUInt("-1"))) return 1
+    if(isSome(parseFloat("abc"))) return 1
+
+    return 0
+}

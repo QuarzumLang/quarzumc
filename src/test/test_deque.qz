@@ -1,0 +1,32 @@
+import "@std/collections/deque.qz"
+import "@std/core/option.qz"
+
+function main() {
+    var d = new Deque<int64>()
+    defer d.release()
+
+    d.pushBack(1)
+    d.pushBack(2)
+    d.pushBack(3)
+    d.pushFront(0)
+    if(d.size() != 4) return 1
+
+    if(unwrap(d.popFront()) != 0) return 1
+    if(unwrap(d.popBack()) != 3) return 1
+    if(d.getUnchecked(0) != 1 || d.getUnchecked(1) != 2) return 1
+
+    d.pushFront(-1)
+    if(d.getUnchecked(0) != -1) return 1
+
+    // Growth across the ring boundary.
+    var i: int64 = 0
+    while(i < 100) {
+        d.pushBack(i)
+        i += 1
+    }
+    if(d.size() != 103) return 1
+    if(unwrap(d.first()) != -1) return 1
+    if(unwrap(d.last()) != 99) return 1
+
+    return 0
+}

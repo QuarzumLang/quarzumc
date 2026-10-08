@@ -1,8 +1,8 @@
 function main() {
-    var p = alloc int64
+    var p = new int64
     free p
 
-    var q = alloc int64[100]
+    var q = new int64[100]
     free q
 
     exit 0

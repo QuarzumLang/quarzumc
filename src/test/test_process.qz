@@ -1,0 +1,21 @@
+// Process arguments and environment.
+
+import "@std/process/process.qz"
+import "@std/core/option.qz"
+
+function main() {
+    // argv[0] is the program name; argc is at least 1.
+    if(argc() < 1) return 1
+    var program = arg(0)
+    if(program.length == 0) return 1
+
+    // PATH is normally present.
+    var path = env("PATH")
+    if(isNone(path)) return 1
+    if(unwrap(path).length == 0) return 1
+
+    // A missing variable yields None.
+    if(isSome(env("QV_DOES_NOT_EXIST_12345"))) return 1
+
+    return 0
+}

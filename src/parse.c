@@ -172,6 +172,265 @@ static Symbol* lookup_symbol(ParserState* state, const char* name){
     return NULL;
 }
 
+// A pointer/reference to a struct value. Member access through it must load
+// the pointer and then apply the field offset (as opposed to a value struct,
+// whose address is the base).
+static bool is_ptr_to_struct(Type* t){
+    return t && t->kind == TY_PTR &&
+           t->base && t->base->kind == TY_STRUCT && t->base->structure.struct_def;
+}
+
+static bool is_value_struct(Type* t){
+    return t && t->kind == TY_STRUCT && t->structure.struct_def;
+}
+
+// Struct name for a receiver type (pointer/reference to struct or a value).
+static char* struct_name_from_type(Type* t){
+    if(is_ptr_to_struct(t)) return t->base->structure.struct_def->name;
+    if(is_value_struct(t)) return t->structure.struct_def->name;
+    return NULL;
+}
+
+// Field type for a member access on a struct value or pointer-to-struct.
+static Type* lookup_field_type(Type* base_ty, const char* field){
+    StructDef* sdef = NULL;
+    if(is_ptr_to_struct(base_ty)) sdef = base_ty->base->structure.struct_def;
+    else if(is_value_struct(base_ty)) sdef = base_ty->structure.struct_def;
+    if(!sdef) return NULL;
+    for(int i = 0; i < sdef->member_count; i++){
+        if(strcmp(sdef->members[i].name, field) == 0) return sdef->members[i].type;
+    }
+    return NULL;
+}
+
+// True when a type still contains an unresolved type parameter anywhere
+// (e.g. `List<T>` inside a generic function signature).
+static bool type_contains_type_param(Type* t){
+    if(!t) return false;
+    switch(t->kind){
+        case TY_TYPE_PARAM:
+            return true;
+        case TY_PTR:
+        case TY_ARRAY:
+            return type_contains_type_param(t->base);
+        case TY_STRUCT:
+            for(int i = 0; i < t->structure.type_arg_count; i++){
+                if(type_contains_type_param(t->structure.type_args[i])) return true;
+            }
+            return false;
+        case TY_ENUM:
+            for(int i = 0; i < t->enumeration.type_arg_count; i++){
+                if(type_contains_type_param(t->enumeration.type_args[i])) return true;
+            }
+            return false;
+        default:
+            return false;
+    }
+}
+
+// Parses an optional trait-bound list after a type parameter name:
+// `T: Ord` or `T: Eq + Hash`. Returns "Ord", "Eq+Hash", or NULL.
+static char* parse_type_param_bounds(ParserState* state){
+    if(!equal(peek(state), ":")) return NULL;
+    next(state);
+    size_t cap = 64, len = 0;
+    char* out = malloc(cap);
+    out[0] = '\0';
+    while(true){
+        Token b = expect_ident(state);
+        size_t bl = strlen(b.value);
+        while(len + bl + 2 > cap) cap *= 2;
+        out = realloc(out, cap);
+        if(len > 0) out[len++] = '+';
+        memcpy(out + len, b.value, bl);
+        len += bl;
+        out[len] = '\0';
+        if(!equal(peek(state), "+")) break;
+        next(state);
+    }
+    return out;
+}
+
+// True when a concrete type satisfies a trait bound.
+static bool type_implements_trait(Type* t, const char* trait){
+    if(!t) return false;
+    // Built-in trait support for the primitive and string types, matching the
+    // overloads provided by @std/core/compare.qz.
+    bool primitive = is_numeric(t) || t->kind == TY_BOOL || t->kind == TY_STRING ||
+                     (t->kind == TY_ARRAY && t->base && t->base->kind == TY_CHAR);
+    if(primitive){
+        if(strcmp(trait, "Eq") == 0 || strcmp(trait, "Ord") == 0 ||
+           strcmp(trait, "Hash") == 0 || strcmp(trait, "Clone") == 0 ||
+           strcmp(trait, "Display") == 0)
+            return true;
+    }
+    // A struct may declare the trait with `implements`.
+    if(t->kind == TY_STRUCT && t->structure.struct_def){
+        ClassDef* cdef = class_table_lookup(t->structure.struct_def->name);
+        if(cdef){
+            for(int i = 0; i < cdef->implements_count; i++){
+                const char* name = cdef->implements[i];
+                size_t len = strcspn(name, "<");
+                if(strlen(trait) == len && strncmp(name, trait, len) == 0) return true;
+            }
+        }
+    }
+    // Otherwise, accept a matching overload of the core function.
+    const char* fn = NULL;
+    if(strcmp(trait, "Eq") == 0) fn = "equals";
+    else if(strcmp(trait, "Ord") == 0) fn = "compare";
+    else if(strcmp(trait, "Hash") == 0) fn = "hashValue";
+    else if(strcmp(trait, "Display") == 0) fn = "toString";
+    else if(strcmp(trait, "Clone") == 0) fn = "clone";
+    if(fn){
+        const char* tn = type_kind_to_name(t);
+        size_t need = strlen(fn) + 2 * strlen(tn) + 4;
+        char* key = malloc(need);
+        snprintf(key, need, "%s_%s_%s", fn, tn, tn);
+        Node* found = function_table_lookup(key);
+        free(key);
+        if(found) return true;
+    }
+    return false;
+}
+
+// Verifies that each concrete type argument satisfies its declared bounds.
+static void check_type_bounds(const char* what, char** param_names, char** bounds,
+                              int param_count, Type** type_args, int arg_count){
+    if(!bounds) return;
+    for(int i = 0; i < param_count && i < arg_count; i++){
+        if(!bounds[i]) continue;
+        char* spec = strdup(bounds[i]);
+        char* save = NULL;
+        for(char* b = strtok_r(spec, "+", &save); b; b = strtok_r(NULL, "+", &save)){
+            if(!type_implements_trait(type_args[i], b)){
+                fprintf(stderr, "type error: type '%s' does not satisfy bound '%s' for type parameter '%s' in '%s'\n",
+                        type_kind_to_name(type_args[i]), b,
+                        param_names ? param_names[i] : "?", what);
+                exit(1);
+            }
+        }
+        free(spec);
+    }
+}
+
+// Mangled methods are `ClassName_methodName[_<param types>]`. Class names may
+// themselves contain '_' (generic instantiations), so the method is matched by
+// stripping the known class prefix. The method name may be followed by the
+// mangled parameter types (method overloading), so it is matched as a prefix.
+static bool method_name_matches(const char* mangled, const char* class_name, const char* method){
+    if(!mangled || !class_name || !method) return false;
+    size_t cl = strlen(class_name);
+    if(strncmp(mangled, class_name, cl) != 0) return false;
+    if(mangled[cl] != '_') return false;
+    const char* rest = mangled + cl + 1;
+    size_t ml = strlen(method);
+    if(strncmp(rest, method, ml) != 0) return false;
+    return rest[ml] == '\0' || rest[ml] == '_';
+}
+
+// Fills in the member-access metadata for a node whose base has type `base_ty`.
+// Sets is_class for pointer/reference bases and is_struct for value bases, and
+// resolves the field offset when the field exists.
+static void resolve_member_access(Node* node, Type* base_ty, const char* field){
+    node->member.field_offset = 0;
+    node->member.is_struct = false;
+    node->member.is_class = false;
+    StructDef* sdef = NULL;
+    if(is_ptr_to_struct(base_ty)){
+        sdef = base_ty->base->structure.struct_def;
+        node->member.is_class = true;
+    } else if(is_value_struct(base_ty)){
+        sdef = base_ty->structure.struct_def;
+        node->member.is_struct = true;
+    } else if(base_ty && (base_ty->kind == TY_STRING || base_ty->kind == TY_ARRAY)){
+        // Slice/string pseudo-fields (resolved at parse time so indexing knows
+        // the element size).
+        if(strcmp(field, "length") == 0){
+            node->ty = ty_uint64;
+        } else if(strcmp(field, "pointer") == 0 || strcmp(field, "ptr") == 0){
+            node->ty = pointer_to(base_ty->base);
+        }
+        return;
+    }
+    if(!sdef) return;
+    for(int i = 0; i < sdef->member_count; i++){
+        if(strcmp(sdef->members[i].name, field) == 0){
+            node->member.field_offset = sdef->members[i].offset;
+            node->ty = sdef->members[i].type;
+            return;
+        }
+    }
+}
+
+// Returns the constructor mangled name `Name_ctor_<argc>` when the struct
+// declares a constructor with that arity, or NULL otherwise.
+static char* find_constructor(const char* struct_name, uint64_t arg_count){
+    ClassDef* cdef = class_table_lookup(struct_name);
+    if(!cdef || !cdef->methods) return NULL;
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%s_ctor_%lu", struct_name, arg_count);
+    for(uint64_t i = 0; i < cdef->methods->length; i++){
+        Node* m = cdef->methods->nodes[i];
+        if(m->funcdef.name && strcmp(m->funcdef.name, buf) == 0)
+            return m->funcdef.name;
+    }
+    return NULL;
+}
+
+// Maps a free function's source name to the list of its funcdefs (overloads),
+// so functions can be used as values.
+static HashMap function_by_name;
+
+static void register_function_name(const char* name, Node* fd){
+    if(!function_by_name.buckets) function_by_name = (HashMap){0};
+    NodeList* list = (NodeList*)hashmap_get(&function_by_name, (char*)name);
+    if(!list){
+        list = make_nodelist();
+        hashmap_put(&function_by_name, (char*)name, list);
+    }
+    nodelist_add(list, fd);
+}
+
+static NodeList* functions_by_name(const char* name){
+    if(!function_by_name.buckets) return NULL;
+    return (NodeList*)hashmap_get(&function_by_name, (char*)name);
+}
+
+// Builds a TY_FUNC type describing a concrete funcdef's signature.
+static Type* func_type_from_funcdef(Node* fd){
+    Type* ty = malloc(sizeof(Type));
+    memset(ty, 0, sizeof(Type));
+    ty->kind = TY_FUNC;
+    ty->size = 8;
+    ty->align = 8;
+    ty->function.return_type = fd->funcdef.return_type ? fd->funcdef.return_type : ty_void;
+    uint64_t n = fd->funcdef.params->length;
+    ty->function.param_count = n;
+    ty->function.params = malloc(sizeof(Type) * (n ? n : 1));
+    for(uint64_t i = 0; i < n; i++){
+        ty->function.params[i] = *(fd->funcdef.params->nodes[i]->param.type);
+    }
+    return ty;
+}
+
+void resolve_funcref_expected(Node* node, Type* expected){
+    if(!node || node->type != ND_FUNCREF || node->funcref.name) return;
+    if(!expected || expected->kind != TY_FUNC) return;
+    NodeList* fns = functions_by_name(node->funcref.source_name);
+    if(!fns) return;
+    for(uint64_t i = 0; i < fns->length; i++){
+        Node* fd = fns->nodes[i];
+        Type* sig = func_type_from_funcdef(fd);
+        if(is_compatible(sig, expected)){
+            node->funcref.name = fd->funcdef.name;
+            node->ty = sig;
+            return;
+        }
+    }
+}
+
+
 static Node* parse_expr(ParserState* state);
 static Node* parse_bitor_expr(ParserState* state);
 static Node* parse_bitxor_expr(ParserState* state);
@@ -193,6 +452,8 @@ typedef struct GenericFuncTemplate GenericFuncTemplate;
 static Node* parse_generic_func_template(ParserState* state, Token name);
 static Type* substitute_template_type(ParserState* state, GenericFuncTemplate* tmpl, Type* tpl, Type** binds);
 static Node* instantiate_generic_func(ParserState* state, GenericFuncTemplate* tmpl, Type** type_args);
+static GenericFuncTemplate* generic_func_template_lookup(const char* name);
+static Node* try_parse_explicit_generic_call(ParserState* state, Token name);
 
 static void parse_enum_def(ParserState* state){
     Token name = expect_ident(state);
@@ -291,57 +552,6 @@ static void parse_enum_def(ParserState* state){
 }
 
 static Type* parse_type(ParserState* state);
-
-static void parse_struct_def(ParserState* state){
-    Token name = expect_ident(state);
-    expect(state, "{");
-
-    StructMember* members = NULL;
-    int member_count = 0;
-    int total_size = 0;
-
-    while(!equal(peek(state), "}")){
-        Token kw = next(state);
-        bool is_const = false;
-        if(equal(kw, "var")){
-            is_const = false;
-        } else if(equal(kw, "const")){
-            is_const = true;
-        } else {
-            fprintf(stderr, "parse error: expected 'var' or 'const', got '%s' at %s:%lu:%lu\n",
-                    kw.value, kw.file, kw.line, kw.column);
-            exit(1);
-        }
-
-        Token mname = expect_ident(state);
-        expect(state, ":");
-        Type* mtype = parse_type(state);
-        expect_stmt_end(state);
-
-        int align = mtype->align > 0 ? mtype->align : 1;
-        total_size = (total_size + align - 1) & ~(align - 1);
-
-        member_count++;
-        members = realloc(members, sizeof(StructMember) * member_count);
-        members[member_count - 1].name = mname.value;
-        members[member_count - 1].type = mtype;
-        members[member_count - 1].is_const = is_const;
-        members[member_count - 1].offset = total_size;
-
-        total_size += mtype->size;
-    }
-    expect(state, "}");
-
-    int align = 8;
-    total_size = (total_size + align - 1) & ~(align - 1);
-
-    StructDef* def = malloc(sizeof(StructDef));
-    def->name = name.value;
-    def->members = members;
-    def->member_count = member_count;
-    def->total_size = total_size;
-    struct_table_add(def);
-}
 
 static Type* parse_type(ParserState* state);
 
@@ -467,15 +677,113 @@ static Type* method_call_return_type(const char* class_name, const char* method)
     if(!class_name || !method) return NULL;
     ClassDef* cdef = class_table_lookup(class_name);
     if(!cdef) return NULL;
+    if(cdef->is_tuple){
+        fprintf(stderr, "parse error: tuple '%s' has no methods (cannot call '%s')\n",
+                class_name, method);
+        exit(1);
+    }
     for(uint64_t mi = 0; mi < cdef->methods->length; mi++){
         Node* m = cdef->methods->nodes[mi];
         char* mangled = m->funcdef.name;
-        char* underscore = mangled ? strchr(mangled, '_') : NULL;
-        if(underscore && strcmp(underscore + 1, method) == 0){
+        if(method_name_matches(mangled, class_name, method)){
             return m->funcdef.return_type;
         }
     }
     return NULL;
+}
+
+// Concatenates two string expressions with the `+` operator.
+static Node* concat_nodes(Node* a, Node* b){
+    if(!a) return b;
+    if(!b) return a;
+    Node* n = make_node(ND_BINARY_EXPR);
+    n->binary_expr.op = OP_ADD;
+    n->binary_expr.lhs = a;
+    n->binary_expr.rhs = b;
+    return n;
+}
+
+static Node* make_strlit_node(const char* value){
+    Node* n = make_node(ND_STRLIT);
+    n->strlit.value = strdup(value);
+    n->strlit.length = unescaped_string_length(value);
+    return n;
+}
+
+/*
+    Desugars a string literal containing `${...}` into a concatenation:
+
+        "x=${a} y=${b}"  =>  "x=" + toString(a) + " y=" + toString(b)
+
+    The inner expression is parsed in the current scope and wrapped in a
+    `toString(...)` call, which is resolved (per type) during type checking.
+*/
+static Node* parse_interpolated_string(ParserState* state, const char* raw){
+    Node* result = NULL;
+    size_t cap = strlen(raw) + 1;
+    char* lit = malloc(cap);
+    size_t lit_len = 0;
+    const char* p = raw;
+
+    while(*p){
+        if(p[0] == '$' && p[1] == '{'){
+            if(lit_len > 0){
+                lit[lit_len] = '\0';
+                result = concat_nodes(result, make_strlit_node(lit));
+                lit_len = 0;
+            }
+            p += 2;
+            const char* start = p;
+            int depth = 1;
+            while(*p && depth > 0){
+                if(*p == '{') depth++;
+                else if(*p == '}') depth--;
+                if(depth == 0) break;
+                p++;
+            }
+            size_t expr_len = (size_t)(p - start);
+            char* snippet = malloc(expr_len + 1);
+            memcpy(snippet, start, expr_len);
+            snippet[expr_len] = '\0';
+
+            File f;
+            f.name = (char*)"<interpolation>";
+            f.size = expr_len;
+            f.content = snippet;
+            TokenList* sub_tokens = tokenize_file(&f);
+
+            ParserState sub = *state;
+            sub.tokens = sub_tokens;
+            sub.index = -1;
+            Node* expr = parse_expr(&sub);
+            state->stack_offset = sub.stack_offset;
+            // sub_tokens is intentionally leaked: AST nodes may reference its
+            // token value strings (names, literals).
+
+            Node* call = make_node(ND_FUNCCALL);
+            call->funcall.name = strdup("toString");
+            NodeList* call_args = make_nodelist();
+            nodelist_add(call_args, expr);
+            call->funcall.args = call_args;
+
+            result = concat_nodes(result, call);
+            free(snippet);
+            if(*p == '}') p++;
+        } else if(p[0] == '\\' && p[1]){
+            // Keep escape sequences verbatim in the literal segment.
+            lit[lit_len++] = *p++;
+            lit[lit_len++] = *p++;
+        } else {
+            lit[lit_len++] = *p++;
+        }
+    }
+    if(lit_len > 0){
+        lit[lit_len] = '\0';
+        result = concat_nodes(result, make_strlit_node(lit));
+    }
+    free(lit);
+    if(!result) return make_strlit_node("");
+    return result;
 }
 
 static Node* parse_primary(ParserState* state){
@@ -490,10 +798,16 @@ static Node* parse_primary(ParserState* state){
         }
         Node* node = make_node(ND_INTLIT);
         node->intlit.value = t.int_value;
+        // Preserve the character type of character literals (they are lexed as
+        // numbers); integer literals keep the default int64 set by the checker.
+        if(t.type && t.type->kind == TY_CHAR) node->ty = ty_char;
         return node;
     }
 
     if(t.kind == TT_STR){
+        if(strstr(t.string_value, "${")){
+            return parse_interpolated_string(state, t.string_value);
+        }
         Node* node = make_node(ND_STRLIT);
         node->strlit.value = t.string_value;
         node->strlit.length = unescaped_string_length(t.string_value);
@@ -527,48 +841,6 @@ static Node* parse_primary(ParserState* state){
         return node;
     }
 
-    if(t.kind == TT_KEYWORD && equal(t, "new")){
-        Token class_name = expect_ident(state);
-        char* effective_name = class_name.value;
-
-        // Check for generic instantiation: new List<int64>()
-        ClassDef* cdef = class_table_lookup(class_name.value);
-        if(cdef && cdef->is_generic_template && cdef->type_param_count > 0 && equal(peek(state), "<")){
-            expect(state, "<");
-            Type** type_args = malloc(sizeof(Type*) * cdef->type_param_count);
-            for(int i = 0; i < cdef->type_param_count; i++){
-                type_args[i] = parse_type(state);
-                if(i < cdef->type_param_count - 1) expect(state, ",");
-            }
-            expect(state, ">");
-            ClassDef* concrete = class_template_instantiate(state, cdef, type_args, cdef->type_param_count);
-            effective_name = concrete->name;
-        }
-
-        expect(state, "(");
-        NodeList* args = make_nodelist();
-        if(!equal(peek(state), ")")){
-            while(true){
-                nodelist_add(args, parse_expr(state));
-                if(!equal(peek(state), ",")) break;
-                next(state);
-            }
-        }
-        expect(state, ")");
-        Node* node = make_node(ND_NEW);
-        node->new_expr.class_name = effective_name;
-        node->new_expr.args = args;
-        // Build constructor mangled name: ClassName_new_N where N = arg count
-        {
-            char* mangled = malloc(strlen(effective_name) + 32);
-            sprintf(mangled, "%s_new_%lu", effective_name, args->length);
-            node->new_expr.mangled_name = mangled;
-        }
-        StructDef* new_sdef = struct_table_lookup(effective_name);
-        if(new_sdef) node->ty = ref_type(struct_type(new_sdef));
-        return node;
-    }
-
     if(t.kind == TT_KEYWORD && equal(t, "null")){
         return make_node(ND_NULL);
     }
@@ -582,12 +854,46 @@ static Node* parse_primary(ParserState* state){
     if(t.kind == TT_KEYWORD && equal(t, "this")){
         Node* this_node = make_node(ND_THIS);
         if(state->current_class){
-            this_node->ty = ref_type(struct_type(struct_table_lookup(state->current_class->name)));
+            this_node->ty = pointer_to(struct_type(struct_table_lookup(state->current_class->name)));
         }
 
         if(equal(peek(state), ".")){
             next(state);
             Token field = expect_ident(state);
+
+            // Resolve the field type to detect function-typed fields.
+            Type* field_ty = NULL;
+            if(state->current_class){
+                for(int i = 0; i < state->current_class->field_count; i++){
+                    if(strcmp(state->current_class->fields[i].name, field.value) == 0){
+                        field_ty = state->current_class->fields[i].type;
+                        break;
+                    }
+                }
+            }
+
+            if(equal(peek(state), "(") && field_ty && field_ty->kind == TY_FUNC){
+                // this.fn(args) — indirect call through a function field.
+                next(state);
+                NodeList* args = make_nodelist();
+                if(!equal(peek(state), ")")){
+                    while(true){
+                        nodelist_add(args, parse_expr(state));
+                        if(!equal(peek(state), ",")) break;
+                        next(state);
+                    }
+                }
+                expect(state, ")");
+                Node* callee = make_node(ND_MEMBER);
+                callee->member.base = this_node;
+                callee->member.field_name = field.value;
+                resolve_member_access(callee, this_node->ty, field.value);
+                Node* node = make_node(ND_INDIRECTCALL);
+                node->indirect_call.callee = callee;
+                node->indirect_call.args = args;
+                node->ty = field_ty->function.return_type;
+                return node;
+            }
 
             if(equal(peek(state), "(")){
                 // this.method(args)
@@ -615,20 +921,7 @@ static Node* parse_primary(ParserState* state){
             Node* node = make_node(ND_MEMBER);
             node->member.base = base;
             node->member.field_name = field.value;
-            node->member.field_offset = 0;
-            node->member.is_struct = false;
-            node->member.is_class = false;
-            if(state->current_class){
-                StructDef* sdef = struct_table_lookup(state->current_class->name);
-                for(int i = 0; i < sdef->member_count; i++){
-                    if(strcmp(sdef->members[i].name, field.value) == 0){
-                        node->member.field_offset = sdef->members[i].offset;
-                        node->member.is_class = true;
-                        node->ty = sdef->members[i].type;
-                        break;
-                    }
-                }
-            }
+            resolve_member_access(node, this_node->ty, field.value);
             return node;
         }
         return this_node;
@@ -641,51 +934,95 @@ static Node* parse_primary(ParserState* state){
     }
 
     if(t.kind == TT_IDENT){
-        // Implicit 'this' — method call (before function call fallback)
+        // Implicit 'this' — method call (before function call fallback). Parse
+        // the arguments first, then pick the overload whose arity matches.
         if(state->current_class && equal(peek(state), "(")){
+            int save_index = state->index;
+            next(state);
+            NodeList* args = make_nodelist();
+            if(!equal(peek(state), ")")){
+                while(true){
+                    nodelist_add(args, parse_expr(state));
+                    if(!equal(peek(state), ",")) break;
+                    next(state);
+                }
+            }
+            expect(state, ")");
+
+            Node* matched_method = NULL;
             NodeList* methods = state->current_class->methods;
             if(methods){
-                Node* matched_method = NULL;
                 for(uint64_t mi = 0; mi < methods->length; mi++){
                     Node* method = methods->nodes[mi];
-                    char* mangled = method->funcdef.name;
-                    char* underscore = strchr(mangled, '_');
-                    if(underscore && strcmp(underscore + 1, t.value) == 0){
+                    if(method_name_matches(method->funcdef.name, state->current_class->name, t.value) &&
+                       method->funcdef.params->length == args->length + 1){
                         matched_method = method;
                         break;
                     }
                 }
-                if(matched_method){
-                    next(state);
-                    NodeList* args = make_nodelist();
-                    if(!equal(peek(state), ")")){
-                        while(true){
-                            nodelist_add(args, parse_expr(state));
-                            if(!equal(peek(state), ",")) break;
-                            next(state);
-                        }
+            }
+            if(matched_method){
+                StructDef* sdef = struct_table_lookup(state->current_class->name);
+                Node* this_node = make_node(ND_THIS);
+                this_node->ty = pointer_to(struct_type(sdef));
+                Node* node = make_node(ND_METHODCALL);
+                node->methodcall.object = this_node;
+                node->methodcall.method = t.value;
+                node->methodcall.args = args;
+                node->methodcall.class_name = state->current_class->name;
+                node->ty = method_call_return_type(node->methodcall.class_name, node->methodcall.method);
+                return node;
+            }
+            // Not a method call: rewind and let the normal expression handling
+            // (struct construction, generic call, function call) parse it.
+            state->index = save_index;
+        }
+        // Explicit generic function call: `name<T, ...>(args)`.
+        {
+            Node* gcall = try_parse_explicit_generic_call(state, t);
+            if(gcall) return gcall;
+        }
+
+        // Call through a function-typed variable: `f(x)`.
+        {
+            Symbol* fsym = lookup_symbol(state, t.value);
+            if(fsym && fsym->type && fsym->type->kind == TY_FUNC && equal(peek(state), "(")){
+                next(state);
+                NodeList* args = make_nodelist();
+                if(!equal(peek(state), ")")){
+                    while(true){
+                        nodelist_add(args, parse_expr(state));
+                        if(!equal(peek(state), ",")) break;
+                        next(state);
                     }
-                    expect(state, ")");
-                    if(matched_method->funcdef.params->length == args->length + 1){
-                        StructDef* sdef = struct_table_lookup(state->current_class->name);
-                        Node* this_node = make_node(ND_THIS);
-                        this_node->ty = ref_type(struct_type(sdef));
-                        Node* node = make_node(ND_METHODCALL);
-                        node->methodcall.object = this_node;
-                        node->methodcall.method = t.value;
-                        node->methodcall.args = args;
-                        node->methodcall.class_name = state->current_class->name;
-                        node->ty = method_call_return_type(node->methodcall.class_name, node->methodcall.method);
-                        return node;
-                    }
-                    // Arity mismatch: the call refers to a global function
-                    // that happens to share a name with a method.
-                    Node* node = make_node(ND_FUNCCALL);
-                    node->funcall.name = t.value;
-                    node->funcall.args = args;
-                    node->ty = resolve_funcall_type(node, state);
-                    return node;
                 }
+                expect(state, ")");
+                Node* callee = make_node(ND_VARREF);
+                callee->varref.name = fsym->name;
+                callee->varref.offset = fsym->offset;
+                callee->varref.is_global = fsym->is_global;
+                callee->ty = fsym->type;
+                Node* node = make_node(ND_INDIRECTCALL);
+                node->indirect_call.callee = callee;
+                node->indirect_call.args = args;
+                node->ty = fsym->type->function.return_type;
+                return node;
+            }
+        }
+
+        // Aggregate construction may be generic: `Name<A, B>(...)`.
+        {
+            ClassDef* tpl = class_table_lookup(t.value);
+            if(tpl && tpl->is_generic_template && equal(peek(state), "<")){
+                next(state);
+                Type** type_args = malloc(sizeof(Type*) * tpl->type_param_count);
+                for(int i = 0; i < tpl->type_param_count; i++){
+                    type_args[i] = parse_type(state);
+                    if(i < tpl->type_param_count - 1) expect(state, ",");
+                }
+                expect(state, ">");
+                ClassDef* concrete = class_template_instantiate(state, tpl, type_args, tpl->type_param_count);
+                t.value = concrete->name;
             }
         }
         if(equal(peek(state), "(")){
@@ -704,6 +1041,7 @@ static Node* parse_primary(ParserState* state){
                 node->structcons.name = t.value;
                 node->structcons.args = args;
                 node->structcons.temp_offset = 0;
+                node->structcons.mangled_name = find_constructor(t.value, args->length);
                 StructDef* csdef = struct_table_lookup(t.value);
                 if(csdef){
                     int tsize = struct_type(csdef)->size;
@@ -769,7 +1107,7 @@ static Node* parse_primary(ParserState* state){
                         for(int i = 0; i < state->current_class->field_count; i++){
                             if(strcmp(state->current_class->fields[i].name, dot_name.value) == 0){
                                 Node* this_node = make_node(ND_THIS);
-                                this_node->ty = ref_type(struct_type(sdef));
+                                this_node->ty = pointer_to(struct_type(sdef));
                                 implicit_base = make_node(ND_MEMBER);
                                 implicit_base->member.base = this_node;
                                 implicit_base->member.field_name = dot_name.value;
@@ -790,6 +1128,41 @@ static Node* parse_primary(ParserState* state){
                 }
             }
 
+            // Function-typed member call: obj.fn(args)
+            if(equal(peek(state), "(")){
+                Type* mty = lookup_field_type(base_type, variant.value);
+                if(mty && mty->kind == TY_FUNC){
+                    next(state);
+                    NodeList* fargs = make_nodelist();
+                    if(!equal(peek(state), ")")){
+                        while(true){
+                            nodelist_add(fargs, parse_expr(state));
+                            if(!equal(peek(state), ",")) break;
+                            next(state);
+                        }
+                    }
+                    expect(state, ")");
+                    Node* callee;
+                    if(implicit_base){
+                        callee = implicit_base;
+                    } else {
+                        callee = make_node(ND_MEMBER);
+                        Node* b = make_node(ND_VARREF);
+                        b->varref.name = sym->name;
+                        b->varref.offset = sym->offset;
+                        b->varref.is_global = sym->is_global;
+                        callee->member.base = b;
+                        callee->member.field_name = variant.value;
+                        resolve_member_access(callee, base_type, variant.value);
+                    }
+                    Node* node = make_node(ND_INDIRECTCALL);
+                    node->indirect_call.callee = callee;
+                    node->indirect_call.args = fargs;
+                    node->ty = mty->function.return_type;
+                    return node;
+                }
+            }
+
             // Check if this is a method call: obj.method(args)
             if(equal(peek(state), "(")){
                 next(state);
@@ -803,22 +1176,8 @@ static Node* parse_primary(ParserState* state){
                 }
                 expect(state, ")");
 
-                // Resolve class name from the variable's type
-                char* class_name = NULL;
-                if(base_type){
-                    if((base_type->kind == TY_PTR || base_type->kind == TY_REF) && base_type->base &&
-                       base_type->base->kind == TY_STRUCT){
-                        StructDef* sdef = base_type->base->structure.struct_def;
-                        if(class_table_lookup(sdef->name)){
-                            class_name = sdef->name;
-                        }
-                    } else if(base_type->kind == TY_STRUCT){
-                        StructDef* sdef = base_type->structure.struct_def;
-                        if(class_table_lookup(sdef->name)){
-                            class_name = sdef->name;
-                        }
-                    }
-                }
+                // Resolve struct name from the variable's type
+                char* class_name = struct_name_from_type(base_type);
 
                 Node* obj;
                 if(implicit_base){
@@ -852,36 +1211,7 @@ static Node* parse_primary(ParserState* state){
             Node* node = make_node(ND_MEMBER);
             node->member.base = base;
             node->member.field_name = variant.value;
-            node->member.field_offset = 0;
-            node->member.is_struct = false;
-            node->member.is_class = false;
-
-            // Check if this is a struct field access (pointer to struct)
-            if(base_type && (base_type->kind == TY_PTR || base_type->kind == TY_REF) && base_type->base &&
-               base_type->base->kind == TY_STRUCT){
-                StructDef* sdef = base_type->base->structure.struct_def;
-                for(int i = 0; i < sdef->member_count; i++){
-                    if(strcmp(sdef->members[i].name, variant.value) == 0){
-                        node->member.field_offset = sdef->members[i].offset;
-                        node->member.is_struct = (class_table_lookup(sdef->name) == NULL);
-                        node->member.is_class = (class_table_lookup(sdef->name) != NULL);
-                        node->ty = sdef->members[i].type;
-                        break;
-                    }
-                }
-            }
-            // Check if this is a direct struct member
-            else if(base_type && base_type->kind == TY_STRUCT){
-                StructDef* sdef = base_type->structure.struct_def;
-                for(int i = 0; i < sdef->member_count; i++){
-                    if(strcmp(sdef->members[i].name, variant.value) == 0){
-                        node->member.field_offset = sdef->members[i].offset;
-                        node->member.is_struct = true;
-                        node->ty = sdef->members[i].type;
-                        break;
-                    }
-                }
-            }
+            resolve_member_access(node, base_type, variant.value);
             return node;
         }
         Symbol* sym = lookup_symbol(state, t.value);
@@ -894,7 +1224,7 @@ static Node* parse_primary(ParserState* state){
                     for(int i = 0; i < state->current_class->field_count; i++){
                         if(strcmp(state->current_class->fields[i].name, t.value) == 0){
                             Node* this_node = make_node(ND_THIS);
-                            this_node->ty = ref_type(struct_type(sdef));
+                            this_node->ty = pointer_to(struct_type(sdef));
                             implicit_base = make_node(ND_MEMBER);
                             implicit_base->member.base = this_node;
                             implicit_base->member.field_name = t.value;
@@ -908,6 +1238,18 @@ static Node* parse_primary(ParserState* state){
                 }
             }
             if(!implicit_base){
+                // A free function used as a value.
+                NodeList* fns = functions_by_name(t.value);
+                if(fns && !equal(peek(state), "(")){
+                    Node* node = make_node(ND_FUNCREF);
+                    node->funcref.source_name = t.value;
+                    if(fns->length == 1){
+                        Node* fd = fns->nodes[0];
+                        node->funcref.name = fd->funcdef.name;
+                        node->ty = func_type_from_funcdef(fd);
+                    }
+                    return node;
+                }
                 fprintf(stderr, "parse error: undefined variable '%s' at %s:%lu:%lu\n",
                         t.value, t.file, t.line, t.column);
                 exit(1);
@@ -945,17 +1287,7 @@ static Node* parse_primary(ParserState* state){
                         }
                     }
                     expect(state, ")");
-                    char* class_name = NULL;
-                    Type* base_type = implicit_base->ty;
-                    if(base_type){
-                        if((base_type->kind == TY_PTR || base_type->kind == TY_REF) && base_type->base && base_type->base->kind == TY_STRUCT){
-                            StructDef* sdef = base_type->base->structure.struct_def;
-                            if(class_table_lookup(sdef->name)) class_name = sdef->name;
-                        } else if(base_type->kind == TY_STRUCT){
-                            StructDef* sdef = base_type->structure.struct_def;
-                            if(class_table_lookup(sdef->name)) class_name = sdef->name;
-                        }
-                    }
+                    char* class_name = struct_name_from_type(implicit_base->ty);
                     Node* node = make_node(ND_METHODCALL);
                     node->methodcall.object = implicit_base;
                     node->methodcall.method = field.value;
@@ -967,33 +1299,7 @@ static Node* parse_primary(ParserState* state){
                 Node* node = make_node(ND_MEMBER);
                 node->member.base = implicit_base;
                 node->member.field_name = field.value;
-                node->member.field_offset = 0;
-                node->member.is_struct = false;
-                node->member.is_class = false;
-                if(implicit_base->ty && (implicit_base->ty->kind == TY_PTR || implicit_base->ty->kind == TY_REF) && implicit_base->ty->base &&
-                   implicit_base->ty->base->kind == TY_STRUCT){
-                    StructDef* sdef = implicit_base->ty->base->structure.struct_def;
-                    if(class_table_lookup(sdef->name)){
-                        for(int j = 0; j < sdef->member_count; j++){
-                            if(strcmp(sdef->members[j].name, field.value) == 0){
-                                node->member.field_offset = sdef->members[j].offset;
-                                node->member.is_class = true;
-                                node->ty = sdef->members[j].type;
-                                break;
-                            }
-                        }
-                    }
-                } else if(implicit_base->ty && implicit_base->ty->kind == TY_STRUCT){
-                    StructDef* sdef = implicit_base->ty->structure.struct_def;
-                    for(int j = 0; j < sdef->member_count; j++){
-                        if(strcmp(sdef->members[j].name, field.value) == 0){
-                            node->member.field_offset = sdef->members[j].offset;
-                            node->member.is_struct = true;
-                            node->ty = sdef->members[j].type;
-                            break;
-                        }
-                    }
-                }
+                resolve_member_access(node, implicit_base->ty, field.value);
                 return node;
             }
             return implicit_base;
@@ -1043,14 +1349,7 @@ static Node* parse_primary(ParserState* state){
                 }
                 expect(state, ")");
 
-                char* class_name = NULL;
-                if(sym->type && (sym->type->kind == TY_PTR || sym->type->kind == TY_REF) && sym->type->base &&
-                   sym->type->base->kind == TY_STRUCT){
-                    StructDef* sdef = sym->type->base->structure.struct_def;
-                    if(class_table_lookup(sdef->name)){
-                        class_name = sdef->name;
-                    }
-                }
+                char* class_name = struct_name_from_type(sym->type);
 
                 Node* obj = make_node(ND_VARREF);
                 obj->varref.name = sym->name;
@@ -1074,35 +1373,7 @@ static Node* parse_primary(ParserState* state){
             Node* node = make_node(ND_MEMBER);
             node->member.base = base;
             node->member.field_name = field.value;
-            node->member.field_offset = 0;
-            node->member.is_struct = false;
-            node->member.is_class = false;
-
-            // Check if class field access (pointer to class)
-            if(sym->type && (sym->type->kind == TY_PTR || sym->type->kind == TY_REF) && sym->type->base &&
-               sym->type->base->kind == TY_STRUCT){
-                StructDef* sdef = sym->type->base->structure.struct_def;
-                if(class_table_lookup(sdef->name)){
-                    for(int i = 0; i < sdef->member_count; i++){
-                        if(strcmp(sdef->members[i].name, field.value) == 0){
-                            node->member.field_offset = sdef->members[i].offset;
-                            node->member.is_class = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            // Check if direct struct member
-            else if(sym->type && sym->type->kind == TY_STRUCT){
-                StructDef* sdef = sym->type->structure.struct_def;
-                for(int i = 0; i < sdef->member_count; i++){
-                    if(strcmp(sdef->members[i].name, field.value) == 0){
-                        node->member.field_offset = sdef->members[i].offset;
-                        node->member.is_struct = true;
-                        break;
-                    }
-                }
-            }
+            resolve_member_access(node, sym->type, field.value);
             return node;
         }
         Node* node = make_node(ND_VARREF);
@@ -1129,20 +1400,6 @@ static Node* parse_not_expr(ParserState* state){
         Node* node = make_node(ND_UNARY_EXPR);
         node->unary_expr.op = OP_NOT;
         node->unary_expr.operand = operand;
-        return node;
-    }
-    if(equal(peek(state), "alloc")){
-        next(state);
-        Type* alloc_type = parse_type_base(state);
-        Node* count = NULL;
-        if(equal(peek(state), "[")){
-            next(state);
-            count = parse_expr(state);
-            expect(state, "]");
-        }
-        Node* node = make_node(ND_ALLOC);
-        node->alloc.alloc_type = alloc_type;
-        node->alloc.count = count;
         return node;
     }
     return parse_bitor_expr(state);
@@ -1202,7 +1459,62 @@ static Node* parse_bitnot_expr(ParserState* state){
     return parse_comparison_expr(state);
 }
 
+// `new` unifies heap allocation and heap construction:
+//   new T          -> allocate one T, returns ptr<T>  (was `alloc T`)
+//   new T[n]       -> allocate an array of n T,        returns ptr<T>
+//   new T(args)    -> construct a T on the heap,       returns ptr<T>
+static Node* parse_new_expr(ParserState* state){
+    Type* ty = parse_type_base(state);
+
+    if(equal(peek(state), "[")){
+        next(state);
+        Node* count = parse_expr(state);
+        expect(state, "]");
+        Node* node = make_node(ND_ALLOC);
+        node->alloc.alloc_type = ty;
+        node->alloc.count = count;
+        node->ty = pointer_to(ty);
+        return node;
+    }
+
+    if(equal(peek(state), "(")){
+        if(!ty || ty->kind != TY_STRUCT || !ty->structure.struct_def){
+            fprintf(stderr, "parse error: 'new T(...)' requires a struct type\n");
+            exit(1);
+        }
+        StructDef* sdef = ty->structure.struct_def;
+        next(state);
+        NodeList* args = make_nodelist();
+        if(!equal(peek(state), ")")){
+            while(true){
+                nodelist_add(args, parse_expr(state));
+                if(!equal(peek(state), ",")) break;
+                next(state);
+            }
+        }
+        expect(state, ")");
+        Node* node = make_node(ND_NEW);
+        node->new_expr.class_name = sdef->name;
+        node->new_expr.args = args;
+        node->new_expr.mangled_name = find_constructor(sdef->name, args->length);
+        return node;
+    }
+
+    // Raw single allocation: `new T`.
+    Node* node = make_node(ND_ALLOC);
+    node->alloc.alloc_type = ty;
+    node->alloc.count = NULL;
+    node->ty = pointer_to(ty);
+    return node;
+}
+
 static Node* parse_cast_expr(ParserState* state){
+    Node* lhs;
+    if(equal(peek(state), "new")){
+        next(state);
+        lhs = parse_new_expr(state);
+        goto postfix;
+    }
     if(equal(peek(state), "-")){
         next(state);
         Node* operand = parse_cast_expr(state);
@@ -1224,8 +1536,7 @@ static Node* parse_cast_expr(ParserState* state){
         if(operand->ty){
             deref_ty = operand->ty->base;
         } else if(operand->type == ND_CAST && operand->cast.target_type &&
-                  (operand->cast.target_type->kind == TY_PTR ||
-                   operand->cast.target_type->kind == TY_REF)){
+                  operand->cast.target_type->kind == TY_PTR){
             deref_ty = operand->cast.target_type->base;
         }
         node->ty = deref_ty;
@@ -1239,7 +1550,8 @@ static Node* parse_cast_expr(ParserState* state){
         node->unary_expr.operand = operand;
         return node;
     }
-    Node* lhs = parse_primary(state);
+    lhs = parse_primary(state);
+postfix:
     while(true){
         if(equal(peek(state), ".")){
             next(state);
@@ -1255,16 +1567,7 @@ static Node* parse_cast_expr(ParserState* state){
                     }
                 }
                 expect(state, ")");
-                char* class_name = NULL;
-                if(lhs->ty){
-                    if((lhs->ty->kind == TY_PTR || lhs->ty->kind == TY_REF) && lhs->ty->base && lhs->ty->base->kind == TY_STRUCT){
-                        StructDef* sdef = lhs->ty->base->structure.struct_def;
-                        if(class_table_lookup(sdef->name)) class_name = sdef->name;
-                    } else if(lhs->ty->kind == TY_STRUCT){
-                        StructDef* sdef = lhs->ty->structure.struct_def;
-                        if(class_table_lookup(sdef->name)) class_name = sdef->name;
-                    }
-                }
+                char* class_name = struct_name_from_type(lhs->ty);
                 Node* node = make_node(ND_METHODCALL);
                 node->methodcall.object = lhs;
                 node->methodcall.method = field.value;
@@ -1277,33 +1580,7 @@ static Node* parse_cast_expr(ParserState* state){
             Node* node = make_node(ND_MEMBER);
             node->member.base = lhs;
             node->member.field_name = field.value;
-            node->member.field_offset = 0;
-            node->member.is_struct = false;
-            node->member.is_class = false;
-            if(lhs->ty && (lhs->ty->kind == TY_PTR || lhs->ty->kind == TY_REF) && lhs->ty->base &&
-               lhs->ty->base->kind == TY_STRUCT){
-                StructDef* sdef = lhs->ty->base->structure.struct_def;
-                if(class_table_lookup(sdef->name)){
-                    for(int j = 0; j < sdef->member_count; j++){
-                        if(strcmp(sdef->members[j].name, field.value) == 0){
-                            node->member.field_offset = sdef->members[j].offset;
-                            node->member.is_class = true;
-                            node->ty = sdef->members[j].type;
-                            break;
-                        }
-                    }
-                }
-            } else if(lhs->ty && lhs->ty->kind == TY_STRUCT){
-                StructDef* sdef = lhs->ty->structure.struct_def;
-                for(int j = 0; j < sdef->member_count; j++){
-                    if(strcmp(sdef->members[j].name, field.value) == 0){
-                        node->member.field_offset = sdef->members[j].offset;
-                        node->member.is_struct = true;
-                        node->ty = sdef->members[j].type;
-                        break;
-                    }
-                }
-            }
+            resolve_member_access(node, lhs->ty, field.value);
             lhs = node;
             continue;
         }
@@ -1335,6 +1612,9 @@ static Node* parse_cast_expr(ParserState* state){
         Node* node = make_node(ND_CAST);
         node->cast.expr = lhs;
         node->cast.target_type = target_type;
+        // The cast's type is known at parse time; recording it here lets
+        // variable declarations and indexing infer sizes correctly.
+        node->ty = target_type;
         return node;
     }
     return lhs;
@@ -1607,11 +1887,35 @@ static Type* parse_type_base(ParserState* state){
                 if(i < cdef->type_param_count - 1) expect(state, ",");
             }
             expect(state, ">");
+
+            // When any argument is still a type parameter (e.g. `List<T>` in a
+            // generic function signature), do not instantiate yet: keep a
+            // deferred application that inference/substitution can resolve.
+            bool deferred = false;
+            for(int i = 0; i < cdef->type_param_count; i++){
+                if(type_contains_type_param(type_args[i])){ deferred = true; break; }
+            }
+            if(deferred){
+                StructDef* fwd = struct_table_lookup(t.value);
+                Type* ty = struct_type(fwd);
+                ty->structure.generic_template = cdef;
+                ty->structure.type_args = type_args;
+                ty->structure.type_arg_count = cdef->type_param_count;
+                return ty;
+            }
+
             // Instantiate the generic class
             ClassDef* concrete = class_template_instantiate(state, cdef, type_args, cdef->type_param_count);
             StructDef* sdef = struct_table_lookup(concrete->name);
-            // A class name denotes a reference to a heap object (same type as ref<Class>)
-            if(sdef) return state->suppress_class_ref ? struct_type(sdef) : ref_type(struct_type(sdef));
+            // Every aggregate name denotes a value; pointers come from `new`
+            // or from an explicit `ptr<T>`.
+            if(sdef){
+                Type* ty = struct_type(sdef);
+                ty->structure.generic_template = cdef;
+                ty->structure.type_args = type_args;
+                ty->structure.type_arg_count = cdef->type_param_count;
+                return ty;
+            }
             fprintf(stderr, "internal error: concrete class '%s' has no struct\n", concrete->name);
             exit(1);
         }
@@ -1639,32 +1943,16 @@ static Type* parse_type_base(ParserState* state){
         if(strcmp(t.value, "ptr") == 0){
             if(equal(peek(state), "<")){
                 expect(state, "<");
-                state->suppress_class_ref += 1;
                 Type* base = parse_type(state);
-                state->suppress_class_ref -= 1;
                 expect(state, ">");
                 return pointer_to(base);
             }
             return pointer_to(ty_void);
         }
 
-        // Handle 'ref' as substituted type param (e.g., T → ref from a trait)
-        if(strcmp(t.value, "ref") == 0){
-            expect(state, "<");
-            state->suppress_class_ref += 1;
-            Type* base = parse_type(state);
-            state->suppress_class_ref -= 1;
-            expect(state, ">");
-            return ref_type(base);
-        }
-
         StructDef* sdef = struct_table_lookup(t.value);
         if(sdef){
-            // A class name denotes a reference to a heap object (same type as ref<Class>);
-            // a struct name denotes a value passed by value.
-            if(class_table_lookup(t.value)){
-                return state->suppress_class_ref ? struct_type(sdef) : ref_type(struct_type(sdef));
-            }
+            // Every aggregate name denotes a value passed by value.
             return struct_type(sdef);
         }
         TraitDef* trait = trait_table_lookup(t.value);
@@ -1706,14 +1994,13 @@ static Type* parse_type_base(ParserState* state){
         expect(state, ")");
         expect(state, "=>");
         Type* return_type = parse_type(state);
-        Type* func_type = copy_type(&(Type){TY_FUNC, 8, 8});
-        func_type->function.return_type = return_type;
-        func_type->function.params = malloc(sizeof(Type) * param_types->length);
-        func_type->function.param_count = param_types->length;
+        Type* ft = func_type(return_type);
+        ft->function.params = malloc(sizeof(Type) * param_types->length);
+        ft->function.param_count = param_types->length;
         for(uint64_t i = 0; i < param_types->length; i++){
-            func_type->function.params[i] = *(param_types->nodes[i]->param.type);
+            ft->function.params[i] = *(param_types->nodes[i]->param.type);
         }
-        return func_type;
+        return ft;
     }
 
     if(t.kind != TT_KEYWORD){
@@ -1741,12 +2028,6 @@ static Type* parse_type_base(ParserState* state){
         Type* base = parse_type(state);
         expect(state, ">");
         return pointer_to(base);
-    }
-    if(equal(t, "ref")){
-        expect(state, "<");
-        Type* base = parse_type(state);
-        expect(state, ">");
-        return ref_type(base);
     }
 bad:
     fprintf(stderr, "parse error: expected type, got '%s' at %s:%lu:%lu\n",
@@ -1792,7 +2073,7 @@ static Node* parse_vardecl(ParserState* state, bool is_const, bool is_global, bo
         // Infer type from new expression if no explicit type
         if(!type && init->type == ND_NEW){
             StructDef* sdef = struct_table_lookup(init->new_expr.class_name);
-            if(sdef) type = ref_type(struct_type(sdef));
+            if(sdef) type = pointer_to(struct_type(sdef));
         }
         if(!type && init->type == ND_STRUCTCONS){
             StructDef* sdef = struct_table_lookup(init->structcons.name);
@@ -1810,8 +2091,7 @@ static Node* parse_vardecl(ParserState* state, bool is_const, bool is_global, bo
                 for(uint64_t mi = 0; mi < cdef->methods->length; mi++){
                     Node* method = cdef->methods->nodes[mi];
                     char* mangled = method->funcdef.name;
-                    char* underscore = strchr(mangled, '_');
-                    if(underscore && strcmp(underscore + 1, init->methodcall.method) == 0){
+                    if(method_name_matches(mangled, init->methodcall.class_name, init->methodcall.method)){
                         type = method->funcdef.return_type;
                         break;
                     }
@@ -1926,8 +2206,7 @@ static Type* infer_type(Node* expr, ParserState* state){
             for(uint64_t mi = 0; mi < cdef->methods->length; mi++){
                 Node* method = cdef->methods->nodes[mi];
                 char* mangled = method->funcdef.name;
-                char* underscore = strchr(mangled, '_');
-                if(underscore && strcmp(underscore + 1, expr->methodcall.method) == 0){
+                if(method_name_matches(mangled, expr->methodcall.class_name, expr->methodcall.method)){
                     return method->funcdef.return_type;
                 }
             }
@@ -1939,7 +2218,7 @@ static Type* infer_type(Node* expr, ParserState* state){
     }
     if(expr->type == ND_NEW){
         StructDef* sdef = struct_table_lookup(expr->new_expr.class_name);
-        if(sdef) return ref_type(struct_type(sdef));
+        if(sdef) return pointer_to(struct_type(sdef));
     }
     if(expr->type == ND_STRUCTCONS){
         StructDef* sdef = struct_table_lookup(expr->structcons.name);
@@ -1959,7 +2238,7 @@ static Type* infer_type(Node* expr, ParserState* state){
     }
     if(expr->type == ND_THIS){
         if(state->current_class){
-            return ref_type(struct_type(struct_table_lookup(state->current_class->name)));
+            return pointer_to(struct_type(struct_table_lookup(state->current_class->name)));
         }
     }
     if(expr->type == ND_NULL){
@@ -2005,7 +2284,7 @@ static Type* infer_type(Node* expr, ParserState* state){
     }
     if(expr->type == ND_NEW){
         StructDef* sdef = struct_table_lookup(expr->new_expr.class_name);
-        if(sdef) return ref_type(struct_type(sdef));
+        if(sdef) return pointer_to(struct_type(sdef));
     }
     if(expr->type == ND_METHODCALL){
         if(expr->methodcall.class_name){
@@ -2013,9 +2292,7 @@ static Type* infer_type(Node* expr, ParserState* state){
             if(cdef){
                 for(uint64_t i = 0; i < cdef->methods->length; i++){
                     Node* m = cdef->methods->nodes[i];
-                    // Match by method name (check suffix of mangled name)
-                    char* suffix = strrchr(m->funcdef.name, '_');
-                    if(suffix && strcmp(suffix + 1, expr->methodcall.method) == 0){
+                    if(method_name_matches(m->funcdef.name, expr->methodcall.class_name, expr->methodcall.method)){
                         return m->funcdef.return_type;
                     }
                 }
@@ -2088,6 +2365,8 @@ static Type* resolve_funcall_type(Node* node, ParserState* state){
 struct GenericFuncTemplate {
     char* name;
     char** type_param_names;
+    // Optional trait bounds per type parameter: "Ord", "Eq+Hash", or NULL.
+    char** type_param_bounds;
     int type_param_count;
     NodeList* params;
     Type* return_type;
@@ -2095,6 +2374,9 @@ struct GenericFuncTemplate {
     int body_start;   // token index of '(' that opens the parameter list
     int body_end;     // token index just past the last body token
     char* file_dir;
+    // Generic function templates may be overloaded by name; templates with the
+    // same name form a list and are disambiguated by inference at the call.
+    struct GenericFuncTemplate* next;
 };
 
 static HashMap generic_func_templates;
@@ -2126,10 +2408,6 @@ static char* mangle_func_generic_arg(Type* t){
         case TY_PTR: strcpy(buf, "voidptr"); break;
         case TY_ARRAY: strcpy(buf, "array"); break;
         case TY_STRUCT: strcpy(buf, t->structure.struct_def->name); break;
-        case TY_REF:
-            if(t->base && t->base->kind == TY_STRUCT) strcpy(buf, t->base->structure.struct_def->name);
-            else strcpy(buf, "ref");
-            break;
         case TY_ENUM:
             strcpy(buf, t->enumeration.def->name);
             for(int i = 0; i < t->enumeration.type_arg_count; i++){
@@ -2182,12 +2460,34 @@ static void bind_template_type(GenericFuncTemplate* tmpl, Type* tpl, Type* conc,
         }
         return;
     }
-    if((tpl->kind == TY_PTR || tpl->kind == TY_REF) && (conc->kind == TY_PTR || conc->kind == TY_REF)){
+    if(tpl->kind == TY_PTR && conc->kind == TY_PTR){
         bind_template_type(tmpl, tpl->base, conc->base, binds);
         return;
     }
     if(tpl->kind == TY_ARRAY && conc->kind == TY_ARRAY){
         bind_template_type(tmpl, tpl->base, conc->base, binds);
+        return;
+    }
+    // Generic struct application: `List<T>` vs `List<int64>`.
+    if(tpl->kind == TY_STRUCT){
+        if(tpl->structure.generic_template && conc->kind == TY_STRUCT &&
+           conc->structure.generic_template == tpl->structure.generic_template){
+            int n = tpl->structure.type_arg_count < conc->structure.type_arg_count
+                        ? tpl->structure.type_arg_count : conc->structure.type_arg_count;
+            for(int i = 0; i < n; i++){
+                bind_template_type(tmpl, tpl->structure.type_args[i], conc->structure.type_args[i], binds);
+            }
+        }
+        return;
+    }
+    // Function types: bind from the return type and parameters.
+    if(tpl->kind == TY_FUNC && conc->kind == TY_FUNC){
+        if(tpl->function.param_count == conc->function.param_count){
+            bind_template_type(tmpl, tpl->function.return_type, conc->function.return_type, binds);
+            for(uint64_t i = 0; i < tpl->function.param_count; i++){
+                bind_template_type(tmpl, &tpl->function.params[i], &conc->function.params[i], binds);
+            }
+        }
         return;
     }
 }
@@ -2214,9 +2514,34 @@ static Type* substitute_template_type(ParserState* state, GenericFuncTemplate* t
             return enum_instantiate(state, base, new_args, tpl->enumeration.type_arg_count);
         }
         case TY_PTR: return pointer_to(substitute_template_type(state, tmpl, tpl->base, binds));
-        case TY_REF: return ref_type(substitute_template_type(state, tmpl, tpl->base, binds));
         // T[] is always a slice: no static arrays/VLAs in the language
         case TY_ARRAY: return dynarray_type(substitute_template_type(state, tmpl, tpl->base, binds));
+        case TY_STRUCT: {
+            if(!tpl->structure.generic_template) return tpl;
+            int n = tpl->structure.type_arg_count;
+            Type** new_args = malloc(sizeof(Type*) * n);
+            for(int i = 0; i < n; i++){
+                new_args[i] = substitute_template_type(state, tmpl, tpl->structure.type_args[i], binds);
+            }
+            ClassDef* concrete = class_template_instantiate(state, tpl->structure.generic_template, new_args, n);
+            StructDef* sdef = concrete ? struct_table_lookup(concrete->name) : NULL;
+            if(!sdef) return tpl;
+            Type* ty = struct_type(sdef);
+            ty->structure.generic_template = tpl->structure.generic_template;
+            ty->structure.type_args = new_args;
+            ty->structure.type_arg_count = n;
+            return ty;
+        }
+        case TY_FUNC: {
+            Type* ret = substitute_template_type(state, tmpl, tpl->function.return_type, binds);
+            Type* ft = func_type(ret);
+            ft->function.param_count = tpl->function.param_count;
+            ft->function.params = malloc(sizeof(Type) * (tpl->function.param_count ? tpl->function.param_count : 1));
+            for(uint64_t i = 0; i < tpl->function.param_count; i++){
+                ft->function.params[i] = *substitute_template_type(state, tmpl, &tpl->function.params[i], binds);
+            }
+            return ft;
+        }
         default: return tpl;
     }
 }
@@ -2273,16 +2598,6 @@ static void write_type_tokens(Type* t, TokenList* out, const char* file, uint64_
             add_type_token(out, "]", file, line, col);
             return;
         case TY_STRUCT: name = t->structure.struct_def->name; break;
-        case TY_REF:
-            if(t->base && t->base->kind == TY_STRUCT){
-                add_type_token(out, "ref", file, line, col);
-                add_type_token(out, "<", file, line, col);
-                add_type_token(out, t->base->structure.struct_def->name, file, line, col);
-                add_type_token(out, ">", file, line, col);
-                return;
-            }
-            name = "ref";
-            break;
         case TY_ENUM:
             if(t->enumeration.type_arg_count > 0){
                 add_type_token(out, t->enumeration.def->name, file, line, col);
@@ -2328,6 +2643,10 @@ static Node* instantiate_generic_func(ParserState* state, GenericFuncTemplate* t
     Node* existing = hashmap_get(&generic_func_instances, mangled);
     if(existing) return existing;
 
+    // Enforce declared trait bounds on the concrete type arguments.
+    check_type_bounds(tmpl->name, tmpl->type_param_names, tmpl->type_param_bounds,
+                      tmpl->type_param_count, type_args, tmpl->type_param_count);
+
     // Resolve type arg names for the primitive single-token substitutions.
     char** type_arg_names = malloc(sizeof(char*) * tmpl->type_param_count);
     for(int i = 0; i < tmpl->type_param_count; i++){
@@ -2348,10 +2667,7 @@ static Node* instantiate_generic_func(ParserState* state, GenericFuncTemplate* t
         else if(t->kind == TY_ENUM) type_arg_names[i] = t->enumeration.def->name;
         else if(t->kind == TY_STRUCT) type_arg_names[i] = t->structure.struct_def->name;
         else if(t->kind == TY_PTR) type_arg_names[i] = "ptr";
-        else if(t->kind == TY_REF){
-            if(t->base && t->base->kind == TY_STRUCT) type_arg_names[i] = t->base->structure.struct_def->name;
-            else type_arg_names[i] = "ref";
-        } else if(t->kind == TY_ARRAY) type_arg_names[i] = "array";
+        else if(t->kind == TY_ARRAY) type_arg_names[i] = "array";
         else {
             fprintf(stderr, "error: unsupported type argument for generic function '%s'\n", tmpl->name);
             exit(1);
@@ -2419,13 +2735,7 @@ static Node* instantiate_generic_func(ParserState* state, GenericFuncTemplate* t
         }
         if(matched >= 0){
             Type* at = type_args[matched];
-            // Classes are reference values; `T` expands to `ref < Name >`.
-            if(at->kind == TY_REF && at->base && at->base->kind == TY_STRUCT){
-                add_type_token(out, "ref", st->file, st->line, st->column);
-                add_type_token(out, "<", st->file, st->line, st->column);
-                add_type_token(out, at->base->structure.struct_def->name, st->file, st->line, st->column);
-                add_type_token(out, ">", st->file, st->line, st->column);
-            } else if(at->kind == TY_ENUM && at->enumeration.type_arg_count > 0){
+            if(at->kind == TY_ENUM && at->enumeration.type_arg_count > 0){
                 write_type_tokens(at, out, st->file, st->line, st->column);
             } else if(at->kind == TY_PTR || at->kind == TY_ARRAY){
                 write_type_tokens(at, out, st->file, st->line, st->column);
@@ -2451,7 +2761,7 @@ static Node* instantiate_generic_func(ParserState* state, GenericFuncTemplate* t
     }
 
     // Re-parse the concrete function from the substituted tokens.
-    ParserState sub_state;
+    ParserState sub_state = {0};
     sub_state.tokens = out;
     sub_state.index = -1;
     sub_state.scope = symbol_table_make();
@@ -2465,7 +2775,6 @@ static Node* instantiate_generic_func(ParserState* state, GenericFuncTemplate* t
     sub_state.current_trait_generic_count = 0;
     sub_state.current_trait_generic_names = NULL;
     sub_state.current_return_type = NULL;
-    sub_state.suppress_class_ref = 0;
     sub_state.current_func_generic_count = 0;
     sub_state.current_func_generic_names = NULL;
 
@@ -2483,38 +2792,97 @@ static Node* instantiate_generic_func(ParserState* state, GenericFuncTemplate* t
     // Cache the real funcdef, replacing the placeholder.
     hashmap_put(&generic_func_instances, mangled, funcdef);
 
+    // Merge methods from generic classes instantiated while parsing this body.
+    ConcreteClassMethodsList* nested = sub_state.generic_methods_head;
+    while(nested){
+        ConcreteClassMethodsList* nxt = nested->next;
+        nested->next = state->generic_methods_head;
+        state->generic_methods_head = nested;
+        nested = nxt;
+    }
+
     // Collect for AST emission.
     if(!generic_func_collector) generic_func_collector = make_nodelist();
     nodelist_add(generic_func_collector, funcdef);
 
-    // Free the temporary token list values.
-    for(uint64_t i = 0; i < out->length; i++){
-        Token* tk = &out->tokens[i];
-        if(tk->kind == TT_IDENT || tk->kind == TT_KEYWORD || tk->kind == TT_NUM || tk->kind == TT_STR){
-            if(tk->value) free((void*)tk->value);
-        }
-    }
-    free(out->tokens);
-    free(out);
+    // NOTE: the substituted token list is intentionally leaked. AST nodes
+    // (call names, global varrefs, ...) keep pointers into its `value`
+    // strings, so freeing it here would leave dangling names. The compiler is
+    // a one-shot process and the number of instantiations is bounded.
 
     free(type_arg_names);
     return funcdef;
 }
 
+/*
+    Parses an explicit generic function call `name<T, ...>(args)` when `name`
+    is a known generic function template and the next token is '<'. Returns the
+    call node, or NULL (leaving the stream untouched) otherwise.
+*/
+static Node* try_parse_explicit_generic_call(ParserState* state, Token name){
+    GenericFuncTemplate* ftpl = generic_func_template_lookup(name.value);
+    if(!ftpl || !equal(peek(state), "<")) return NULL;
+
+    next(state); // consume '<'
+    Type** type_args = NULL;
+    int type_arg_count = 0;
+    while(true){
+        Type* ta = parse_type(state);
+        type_arg_count++;
+        type_args = realloc(type_args, sizeof(Type*) * type_arg_count);
+        type_args[type_arg_count - 1] = ta;
+        if(!equal(peek(state), ",")) break;
+        next(state);
+    }
+    expect(state, ">");
+
+    GenericFuncTemplate* tmpl = NULL;
+    for(GenericFuncTemplate* e = ftpl; e; e = e->next){
+        if(e->type_param_count == type_arg_count){ tmpl = e; break; }
+    }
+    if(!tmpl){
+        fprintf(stderr, "parse error: no generic function '%s' with %d type parameter(s)\n",
+                name.value, type_arg_count);
+        exit(1);
+    }
+    if(!equal(peek(state), "(")){
+        fprintf(stderr, "parse error: expected '(' after type arguments for '%s'\n", name.value);
+        exit(1);
+    }
+    next(state);
+    NodeList* args = make_nodelist();
+    if(!equal(peek(state), ")")){
+        while(true){
+            nodelist_add(args, parse_expr(state));
+            if(!equal(peek(state), ",")) break;
+            next(state);
+        }
+    }
+    expect(state, ")");
+
+    Node* fn = instantiate_generic_func(state, tmpl, type_args);
+    Node* node = make_node(ND_FUNCCALL);
+    node->funcall.name = strdup(fn->funcdef.name);
+    node->funcall.args = args;
+    node->ty = fn->funcdef.return_type;
+    return node;
+}
+
 Node* resolve_generic_funcall_types(ParserState* state, const char* name, Type** arg_types, int arg_count){
-    GenericFuncTemplate* tmpl = generic_func_template_lookup(name);
-    if(getenv("QZ_DEBUG_GEN"))
-        fprintf(stderr, "[resolve] types '%s' tmpl=%s nparams=%u nargs=%d\n",
-                name, tmpl ? tmpl->name : "NULL", tmpl ? (unsigned)tmpl->params->length : 0, arg_count);
-    if(!tmpl) return NULL;
-    if(arg_count != (int)tmpl->params->length) return NULL;
-    Type** binds = infer_generic_type_args(tmpl, arg_types, arg_count);
-    if(getenv("QZ_DEBUG_GEN"))
-        fprintf(stderr, "[resolve] binds=%s\n", binds ? "OK" : "NULL");
-    if(!binds) return NULL;
-    Node* funcdef = instantiate_generic_func(state, tmpl, binds);
-    free(binds);
-    return funcdef;
+    // Try every template with this name whose arity matches; the first one
+    // whose type parameters can be inferred from the argument types wins.
+    for(GenericFuncTemplate* tmpl = generic_func_template_lookup(name); tmpl; tmpl = tmpl->next){
+        if(arg_count != (int)tmpl->params->length) continue;
+        Type** binds = infer_generic_type_args(tmpl, arg_types, arg_count);
+        if(getenv("QZ_DEBUG_GEN"))
+            fprintf(stderr, "[resolve] types '%s' tmpl nparams=%u binds=%s\n",
+                    name, (unsigned)tmpl->params->length, binds ? "OK" : "NULL");
+        if(!binds) continue;
+        Node* funcdef = instantiate_generic_func(state, tmpl, binds);
+        free(binds);
+        return funcdef;
+    }
+    return NULL;
 }
 
 Node* resolve_generic_funcall(ParserState* state, const char* name, NodeList* args){
@@ -2538,13 +2906,15 @@ Node* resolve_generic_funcall(ParserState* state, const char* name, NodeList* ar
 }
 
 Node* instantiate_generic_func_for_types(ParserState* state, const char* name, Type** arg_types, int arg_count){
-    GenericFuncTemplate* tmpl = generic_func_template_lookup(name);
-    if(!tmpl) return NULL;
-    Type** binds = infer_generic_type_args(tmpl, arg_types, arg_count);
-    if(!binds) return NULL;
-    Node* funcdef = instantiate_generic_func(state, tmpl, binds);
-    free(binds);
-    return funcdef;
+    for(GenericFuncTemplate* tmpl = generic_func_template_lookup(name); tmpl; tmpl = tmpl->next){
+        if(arg_count != (int)tmpl->params->length) continue;
+        Type** binds = infer_generic_type_args(tmpl, arg_types, arg_count);
+        if(!binds) continue;
+        Node* funcdef = instantiate_generic_func(state, tmpl, binds);
+        free(binds);
+        return funcdef;
+    }
+    return NULL;
 }
 
 void append_generic_funcs_to_ast(Node* ast){
@@ -2614,7 +2984,7 @@ static Node* parse_assign_stmt(ParserState* state, Token name, Token op){
                     expect_stmt_end(state);
                     StructDef* sdef = struct_table_lookup(state->current_class->name);
                     Node* this_node = make_node(ND_THIS);
-                    this_node->ty = ref_type(struct_type(sdef));
+                    this_node->ty = pointer_to(struct_type(sdef));
                     Node* val_expr = NULL;
                     if(equal(op, "=")){
                         val_expr = value;
@@ -2644,6 +3014,7 @@ static Node* parse_assign_stmt(ParserState* state, Token name, Token op){
                     node->member_assign.field_name = name.value;
                     node->member_assign.field_offset = state->current_class->fields[i].offset;
                     node->member_assign.value = val_expr;
+                    node->member_assign.field_type = state->current_class->fields[i].type;
                     return node;
                 }
             }
@@ -2930,6 +3301,13 @@ static Node* parse_stmt(ParserState* state){
     if(equal(t, "continue")){
         return parse_continue_stmt(state);
     }
+    if(equal(t, "defer")){
+        // `defer stmt`: run stmt when the enclosing block exits (LIFO).
+        Node* inner = parse_stmt(state);
+        Node* node = make_node(ND_DEFER);
+        node->defer_stmt.stmt = inner;
+        return node;
+    }
     if(equal(t, "free")){
         Node* operand = parse_expr(state);
         expect_stmt_end(state);
@@ -2971,49 +3349,9 @@ static Node* parse_stmt(ParserState* state){
     if(t.kind == TT_IDENT){
         Token op = peek(state);
         if(equal(op, "(")){
-            // Implicit 'this' — method call statement
-            if(state->current_class){
-                int found_method = 0;
-                NodeList* methods = state->current_class->methods;
-                if(methods){
-                    for(uint64_t mi = 0; mi < methods->length; mi++){
-                        Node* method = methods->nodes[mi];
-                        char* mangled = method->funcdef.name;
-                        char* underscore = strchr(mangled, '_');
-                        if(underscore && strcmp(underscore + 1, t.value) == 0){
-                            found_method = 1;
-                            break;
-                        }
-                    }
-                }
-                if(found_method){
-                    NodeList* args = make_nodelist();
-                    next(state);
-                    if(!equal(peek(state), ")")){
-                        while(true){
-                            nodelist_add(args, parse_expr(state));
-                            if(!equal(peek(state), ",")) break;
-                            next(state);
-                        }
-                    }
-                    expect(state, ")");
-                    expect_stmt_end(state);
-                    StructDef* sdef = struct_table_lookup(state->current_class->name);
-                    Node* this_node = make_node(ND_THIS);
-                    this_node->ty = ref_type(struct_type(sdef));
-                    Node* node = make_node(ND_METHODCALL);
-                    node->methodcall.object = this_node;
-                    node->methodcall.method = t.value;
-                    node->methodcall.args = args;
-                    node->methodcall.class_name = state->current_class->name;
-                    node->ty = method_call_return_type(node->methodcall.class_name, node->methodcall.method);
-                    Node* stmt = make_node(ND_EXPR_STMT);
-                    stmt->expr_stmt.expr = node;
-                    return stmt;
-                }
-            }
-            NodeList* args = make_nodelist();
+            int save_index = state->index;
             next(state);
+            NodeList* args = make_nodelist();
             if(!equal(peek(state), ")")){
                 while(true){
                     nodelist_add(args, parse_expr(state));
@@ -3022,12 +3360,40 @@ static Node* parse_stmt(ParserState* state){
                 }
             }
             expect(state, ")");
-            expect_stmt_end(state);
-            Node* node = make_node(ND_FUNCCALL);
-            node->funcall.name = t.value;
-            node->funcall.args = args;
-            node->ty = resolve_funcall_type(node, state);
-            return node;
+
+            // Implicit 'this' method call: pick the overload by arity.
+            Node* matched_method = NULL;
+            if(state->current_class){
+                NodeList* methods = state->current_class->methods;
+                if(methods){
+                    for(uint64_t mi = 0; mi < methods->length; mi++){
+                        Node* method = methods->nodes[mi];
+                        if(method_name_matches(method->funcdef.name, state->current_class->name, t.value) &&
+                           method->funcdef.params->length == args->length + 1){
+                            matched_method = method;
+                            break;
+                        }
+                    }
+                }
+            }
+            if(matched_method){
+                expect_stmt_end(state);
+                StructDef* sdef = struct_table_lookup(state->current_class->name);
+                Node* this_node = make_node(ND_THIS);
+                this_node->ty = pointer_to(struct_type(sdef));
+                Node* node = make_node(ND_METHODCALL);
+                node->methodcall.object = this_node;
+                node->methodcall.method = t.value;
+                node->methodcall.args = args;
+                node->methodcall.class_name = state->current_class->name;
+                node->ty = method_call_return_type(node->methodcall.class_name, node->methodcall.method);
+                Node* stmt = make_node(ND_EXPR_STMT);
+                stmt->expr_stmt.expr = node;
+                return stmt;
+            }
+            // Not a method call: rewind and parse it as an expression
+            // statement (struct construction, function call, ...).
+            state->index = save_index;
         }
         if(equal(op, "=") || equal(op, "+=") || equal(op, "-=") ||
            equal(op, "*=") || equal(op, "/=") || equal(op, "%=") ||
@@ -3079,6 +3445,52 @@ static Node* parse_stmt(ParserState* state){
         node->member_assign.value = val_expr;
         node->member_assign.is_class = expr->member.is_class;
         node->member_assign.is_struct = expr->member.is_struct;
+        node->member_assign.field_type = expr->ty;
+        return node;
+    }
+
+    // Check for indexed assignment: expr[i] = value
+    if(expr->type == ND_INDEX && (equal(op, "=") || equal(op, "+=") || equal(op, "-=") ||
+       equal(op, "*=") || equal(op, "/=") || equal(op, "%=") ||
+       equal(op, "&&=") || equal(op, "||=") || equal(op, "^^=") || equal(op, "!!="))){
+        next(state);
+        Node* value = parse_expr(state);
+        expect_stmt_end(state);
+
+        Type* elem_ty = expr->ty;
+        // Address of the element, reusing the `&expr[i]` codegen.
+        Node* addr = make_node(ND_UNARY_EXPR);
+        addr->unary_expr.op = OP_ADDR;
+        addr->unary_expr.operand = expr;
+        addr->ty = elem_ty ? pointer_to(elem_ty) : NULL;
+
+        Node* val_expr = NULL;
+        if(equal(op, "=")){
+            val_expr = value;
+        } else if(equal(op, "!!=")){
+            Node* un = make_node(ND_UNARY_EXPR);
+            un->unary_expr.op = OP_BITNOT;
+            un->unary_expr.operand = expr;
+            val_expr = un;
+        } else {
+            Node* bin = make_node(ND_BINARY_EXPR);
+            bin->binary_expr.lhs = expr;
+            bin->binary_expr.rhs = value;
+            if(equal(op, "+="))       bin->binary_expr.op = OP_ADD;
+            else if(equal(op, "-="))  bin->binary_expr.op = OP_SUB;
+            else if(equal(op, "*="))  bin->binary_expr.op = OP_MUL;
+            else if(equal(op, "/="))  bin->binary_expr.op = OP_DIV;
+            else if(equal(op, "%="))  bin->binary_expr.op = OP_MOD;
+            else if(equal(op, "&&=")) bin->binary_expr.op = OP_BITAND;
+            else if(equal(op, "||=")) bin->binary_expr.op = OP_BITOR;
+            else if(equal(op, "^^=")) bin->binary_expr.op = OP_BITXOR;
+            val_expr = bin;
+        }
+
+        Node* node = make_node(ND_DEREF_ASSIGN);
+        node->deref_assign.target = addr;
+        node->deref_assign.value = val_expr;
+        node->deref_assign.target_type = elem_ty;
         return node;
     }
 
@@ -3106,12 +3518,22 @@ static AccessModifier parse_access_modifier(ParserState* state){
 
 static void parse_class_body(ParserState* state, ClassDef* class_def);
 
-static char* parse_class_def(ParserState* state){
+/*
+    `tuple Name (field: Type, ...);`  or  `tuple Name<T, ...> (field: T, ...);`
+
+    A tuple is an immutable aggregate with no methods: every field is public
+    and const. It is otherwise laid out and constructed exactly like a struct
+    with const fields (so `Name(a, b)` builds a value and `new Name(a, b)`
+    builds one on the heap). Generic tuples are instantiated lazily through the
+    same template mechanism as generic structs.
+*/
+static char* parse_tuple_def(ParserState* state){
     Token name = expect_ident(state);
 
-    // Parse type parameters e.g., <T> or <K, V>
+    // Optional type parameters: tuple Pair<T, U> (a: T, b: U)
     int type_param_count = 0;
     char** type_params = NULL;
+    char** type_param_bounds = NULL;
     if(equal(peek(state), "<")){
         next(state);
         while(true){
@@ -3119,6 +3541,153 @@ static char* parse_class_def(ParserState* state){
             type_param_count++;
             type_params = realloc(type_params, sizeof(char*) * type_param_count);
             type_params[type_param_count - 1] = tp.value;
+            type_param_bounds = realloc(type_param_bounds, sizeof(char*) * type_param_count);
+            type_param_bounds[type_param_count - 1] = parse_type_param_bounds(state);
+            if(!equal(peek(state), ",")) break;
+            next(state);
+        }
+        expect(state, ">");
+    }
+
+    if(type_param_count > 0){
+        // Generic tuple template: record the field-list tokens and defer.
+        ClassDef* cdef = malloc(sizeof(ClassDef));
+        cdef->name = name.value;
+        cdef->type_params = type_params;
+        cdef->type_param_count = type_param_count;
+        cdef->type_param_bounds = type_param_bounds;
+        cdef->fields = NULL;
+        cdef->field_count = 0;
+        cdef->total_size = 0;
+        cdef->methods = make_nodelist();
+        cdef->implements = NULL;
+        cdef->implements_count = 0;
+        cdef->is_generic_template = true;
+        cdef->body_token_start = -1;
+        cdef->body_token_end = -1;
+        cdef->mangled_name = NULL;
+        cdef->is_tuple = true;
+        cdef->template_def = NULL;
+        cdef->type_args = NULL;
+        cdef->type_arg_count = 0;
+
+        // body_token_start = token before '('; body_token_end = index of ')'
+        if(equal(peek(state), "(")){
+            cdef->body_token_start = (int)state->index;
+            next(state); // consume '('
+            int depth = 1;
+            while(depth > 0 && state->index < state->tokens->length){
+                Token t = next(state);
+                if(equal(t, "(")) depth++;
+                if(equal(t, ")")) depth--;
+            }
+            cdef->body_token_end = (int)state->index;
+        }
+        cdef->body_tokens = state->tokens;
+        class_table_add(cdef);
+
+        // Forward-declared struct so the name resolves as a type meanwhile.
+        StructDef* fwd = malloc(sizeof(StructDef));
+        fwd->name = name.value;
+        fwd->members = NULL;
+        fwd->member_count = 0;
+        fwd->total_size = 0;
+        struct_table_add(fwd);
+
+        expect_stmt_end(state);
+        return name.value;
+    }
+
+    expect(state, "(");
+
+    StructMember* members = NULL;
+    int member_count = 0;
+    int total_size = 0;
+
+    while(!equal(peek(state), ")")){
+        if(member_count > 0) expect(state, ",");
+        if(equal(peek(state), ")")) break; // trailing comma
+
+        Token fname = expect_ident(state);
+        expect(state, ":");
+        Type* ftype = parse_type(state);
+
+        int align = ftype->align > 0 ? ftype->align : 1;
+        total_size = (total_size + align - 1) & ~(align - 1);
+
+        member_count++;
+        members = realloc(members, sizeof(StructMember) * member_count);
+        members[member_count - 1].name = fname.value;
+        members[member_count - 1].type = ftype;
+        members[member_count - 1].is_const = true;
+        members[member_count - 1].offset = total_size;
+
+        total_size += ftype->size;
+    }
+    expect(state, ")");
+    expect_stmt_end(state);
+
+    int align = 8;
+    total_size = (total_size + align - 1) & ~(align - 1);
+
+    StructDef* sdef = malloc(sizeof(StructDef));
+    sdef->name = name.value;
+    sdef->members = members;
+    sdef->member_count = member_count;
+    sdef->total_size = total_size;
+    struct_table_add(sdef);
+
+    ClassDef* cdef = malloc(sizeof(ClassDef));
+    cdef->name = name.value;
+    cdef->type_params = NULL;
+    cdef->type_param_count = 0;
+    cdef->fields = NULL;
+    cdef->field_count = member_count;
+    if(member_count > 0){
+        cdef->fields = malloc(sizeof(ClassField) * member_count);
+        for(int i = 0; i < member_count; i++){
+            cdef->fields[i].name = members[i].name;
+            cdef->fields[i].type = members[i].type;
+            cdef->fields[i].access = ACCESS_PUBLIC;
+            cdef->fields[i].is_const = true;
+            cdef->fields[i].offset = members[i].offset;
+        }
+    }
+    cdef->total_size = total_size;
+    cdef->methods = make_nodelist();
+    cdef->implements = NULL;
+    cdef->implements_count = 0;
+    cdef->is_generic_template = false;
+    cdef->body_token_start = -1;
+    cdef->body_token_end = -1;
+    cdef->body_tokens = NULL;
+    cdef->mangled_name = NULL;
+    cdef->is_tuple = true;
+    cdef->template_def = NULL;
+    cdef->type_args = NULL;
+    cdef->type_arg_count = 0;
+    cdef->type_param_bounds = NULL;
+    class_table_add(cdef);
+
+    return name.value;
+}
+
+static char* parse_struct_def(ParserState* state){
+    Token name = expect_ident(state);
+
+    // Parse type parameters e.g., <T> or <K, V> or <T: Ord, U: Eq + Hash>
+    int type_param_count = 0;
+    char** type_params = NULL;
+    char** type_param_bounds = NULL;
+    if(equal(peek(state), "<")){
+        next(state);
+        while(true){
+            Token tp = expect_ident(state);
+            type_param_count++;
+            type_params = realloc(type_params, sizeof(char*) * type_param_count);
+            type_params[type_param_count - 1] = tp.value;
+            type_param_bounds = realloc(type_param_bounds, sizeof(char*) * type_param_count);
+            type_param_bounds[type_param_count - 1] = parse_type_param_bounds(state);
             if(!equal(peek(state), ",")) break;
             next(state);
         }
@@ -3155,12 +3724,17 @@ static char* parse_class_def(ParserState* state){
     class_def->name = name.value;
     class_def->type_params = type_params;
     class_def->type_param_count = type_param_count;
+    class_def->type_param_bounds = type_param_bounds;
     class_def->fields = NULL;
     class_def->field_count = 0;
     class_def->total_size = 0;
     class_def->methods = make_nodelist();
     class_def->implements = implements;
     class_def->implements_count = implements_count;
+    class_def->is_tuple = false;
+    class_def->template_def = NULL;
+    class_def->type_args = NULL;
+    class_def->type_arg_count = 0;
 
     if(type_param_count > 0){
         // Generic class template: skip body tokens for later instantiation
@@ -3292,7 +3866,7 @@ static void parse_class_body(ParserState* state, ClassDef* class_def){
             nodelist_add(class_def->methods, method);
         }
         else {
-            fprintf(stderr, "parse error: expected 'var' or 'function' in class body at %s:%lu:%lu\n",
+            fprintf(stderr, "parse error: expected 'var' or 'function' in struct body at %s:%lu:%lu\n",
                     peek(state).file, peek(state).line, peek(state).column);
             exit(1);
         }
@@ -3326,9 +3900,6 @@ char* make_mangled_name(const char* class_name, Type** type_args, int type_arg_c
         else if(type_args[i]->kind == TY_ENUM) snprintf(tn, sizeof(tn), "_%s", type_args[i]->enumeration.def->name);
         else if(type_args[i]->kind == TY_STRUCT) snprintf(tn, sizeof(tn), "_%s", type_args[i]->structure.struct_def->name);
         else if(type_args[i]->kind == TY_PTR) strcpy(tn, "_voidptr");
-        else if(type_args[i]->kind == TY_REF && type_args[i]->base && type_args[i]->base->kind == TY_STRUCT)
-            snprintf(tn, sizeof(tn), "_%s", type_args[i]->base->structure.struct_def->name);
-        else if(type_args[i]->kind == TY_REF) strcpy(tn, "_ref");
         else strcpy(tn, "_unknown");
         result = realloc(result, strlen(result) + strlen(tn) + 1);
         strcat(result, tn);
@@ -3350,6 +3921,11 @@ ClassDef* class_template_instantiate(ParserState* state, ClassDef* template_def,
     char* mangled = make_mangled_name(template_def->name, type_args, type_arg_count);
     ClassDef* existing = hashmap_get(&generic_class_instances, mangled);
     if(existing) return existing;
+
+    // Enforce declared trait bounds on the concrete type arguments.
+    check_type_bounds(template_def->name, template_def->type_params,
+                      template_def->type_param_bounds, template_def->type_param_count,
+                      type_args, type_arg_count);
 
     if(template_def->body_token_start < 0 || template_def->body_token_end < 0){
         fprintf(stderr, "internal error: template '%s' has no body tokens\n", template_def->name);
@@ -3378,19 +3954,8 @@ ClassDef* class_template_instantiate(ParserState* state, ClassDef* template_def,
             type_arg_names[i] = malloc(20);
             snprintf(type_arg_names[i], 20, "ptr");
         }
-        else if(type_args[i]->kind == TY_REF){
-            // A class name denotes a reference (ref<Class>); substitute the
-            // class name itself so templates see `ptr<Name>` instead of the
-            // invalid `ptr<ref>`.
-            if(type_args[i]->base && type_args[i]->base->kind == TY_STRUCT)
-                type_arg_names[i] = strdup(type_args[i]->base->structure.struct_def->name);
-            else {
-                type_arg_names[i] = malloc(20);
-                snprintf(type_arg_names[i], 20, "ref");
-            }
-        }
         else {
-            fprintf(stderr, "error: unsupported type arg for generic class\n");
+            fprintf(stderr, "error: unsupported type argument for generic '%s'\n", template_def->name);
             exit(1);
         }
     }
@@ -3403,33 +3968,16 @@ ClassDef* class_template_instantiate(ParserState* state, ClassDef* template_def,
     }
 
     // Create a new TokenList from the template body tokens with type substitution
-    // body_token_start is the index of the token BEFORE '{'
-    // body_token_end is the index of the closing '}'
-    // Body content (excluding braces) is at indices body_token_start+2 .. body_token_end-1
+    // body_token_start is the index of the token BEFORE the opening delimiter
+    // body_token_end is the index of the closing delimiter
+    // Body content (excluding delimiters) is at indices body_token_start+2 .. body_token_end-1
+    bool is_tuple = template_def->is_tuple;
     int body_start = template_def->body_token_start + 2;
-    int body_end = template_def->body_token_end; // exclusive (past the '}')
+    int body_end = template_def->body_token_end; // exclusive (at the closing delimiter)
     int body_len = body_end - body_start;
 
-    // Count tokens to allocate: header + body + closing brace.
-    // Each type param occurrence that maps to a class expands to
-    // `ref < Name >`; the trailing ti++ is skipped for expanded tokens,
-    // so 4 extra slots are needed (writes land at ti..ti+3).
-    int total_tokens = 5 + body_len; // "class", "mangled", "{", body..., "}"
-    for(int i = body_start; i < body_end; i++){
-        Token* src = &template_tokens->tokens[i];
-        if(src->value){
-            for(int p = 0; p < template_def->type_param_count; p++){
-                if(strcmp(src->value, template_def->type_params[p]) == 0 &&
-                   type_args[p] && type_args[p]->kind == TY_REF){
-                    // `ref < Name >` replaces a single `T` token; the trailing
-                    // ti++ below is skipped for expanded tokens, so we need
-                    // 4 extra slots (writes land at ti..ti+3).
-                    total_tokens += 4;
-                    break;
-                }
-            }
-        }
-    }
+    // Count tokens to allocate: header (kw, name, open) + body + closing delimiter.
+    int total_tokens = 5 + body_len;
     Token* new_tokens = calloc(total_tokens, sizeof(Token));
 
     int ti = 0;
@@ -3437,68 +3985,49 @@ ClassDef* class_template_instantiate(ParserState* state, ClassDef* template_def,
     // Find a valid token from the template for file/line references
     Token* ref_tok = &template_tokens->tokens[template_def->body_token_start + 1];
 
-    // Token for "class" keyword
+    // Keyword ("struct" or "tuple")
     new_tokens[ti].kind = TT_KEYWORD;
-    new_tokens[ti].value = "class";
+    new_tokens[ti].value = is_tuple ? "tuple" : "struct";
     new_tokens[ti].file = ref_tok->file;
     new_tokens[ti].line = ref_tok->line;
     ti++;
 
-    // Token for class name (mangled)
+    // Name (mangled)
     new_tokens[ti].kind = TT_IDENT;
     new_tokens[ti].value = mangled;
     new_tokens[ti].file = ref_tok->file;
     new_tokens[ti].line = ref_tok->line;
     ti++;
 
-    // Opening brace
+    // Opening delimiter
     new_tokens[ti].kind = TT_PUNCT;
-    new_tokens[ti].value = "{";
+    new_tokens[ti].value = is_tuple ? "(" : "{";
     new_tokens[ti].file = ref_tok->file;
     new_tokens[ti].line = ref_tok->line;
     ti++;
 
     // Copy body tokens with substitution (body content between the braces)
+    Token* prev_src = (body_start > 0) ? &template_tokens->tokens[body_start - 1] : NULL;
     for(int i = body_start; i < body_end; i++){
         Token* src = &template_tokens->tokens[i];
         new_tokens[ti] = *src;
         new_tokens[ti].value = strdup(src->value ? src->value : "");
 
+        // The constructor is declared as `function <TemplateName>(...)`; rewrite
+        // that one occurrence to the concrete mangled name so it is recognized
+        // as the constructor (method name == struct name).
+        if(prev_src && prev_src->kind == TT_KEYWORD && prev_src->value &&
+           strcmp(prev_src->value, "function") == 0 &&
+           src->value && strcmp(src->value, template_def->name) == 0){
+            free((void*)new_tokens[ti].value);
+            new_tokens[ti].value = strdup(mangled);
+        }
+        prev_src = src;
+
         // Substitute type param names with concrete types
-        int expanded = 0;
         for(int p = 0; p < template_def->type_param_count; p++){
             if(strcmp(new_tokens[ti].value, template_def->type_params[p]) == 0){
                 free((void*)new_tokens[ti].value);
-
-                // Classes are reference types; a `T` value is already a reference.
-                // Emit `ref < Name >` so e.g. `ptr<T>` becomes a pointer to a
-                // reference (correct for generic containers of classes).
-                if(type_args[p] && type_args[p]->kind == TY_REF &&
-                   type_args[p]->base && type_args[p]->base->kind == TY_STRUCT){
-                    expanded = 1;
-                    new_tokens[ti].kind = TT_IDENT;
-                    new_tokens[ti].value = "ref";
-                    new_tokens[ti].file = src->file;
-                    new_tokens[ti].line = src->line;
-                    ti++;
-                    new_tokens[ti].kind = TT_PUNCT;
-                    new_tokens[ti].value = "<";
-                    new_tokens[ti].file = src->file;
-                    new_tokens[ti].line = src->line;
-                    ti++;
-                    new_tokens[ti].kind = TT_IDENT;
-                    new_tokens[ti].value = strdup(type_args[p]->base->structure.struct_def->name);
-                    new_tokens[ti].file = src->file;
-                    new_tokens[ti].line = src->line;
-                    ti++;
-                    new_tokens[ti].kind = TT_PUNCT;
-                    new_tokens[ti].value = ">";
-                    new_tokens[ti].file = src->file;
-                    new_tokens[ti].line = src->line;
-                    ti++;
-                    break;
-                }
-
                 new_tokens[ti].value = strdup(type_arg_names[p]);
                 // If the substituted name is a type keyword, update the token kind
                 const char* v = new_tokens[ti].value;
@@ -3511,12 +4040,12 @@ ClassDef* class_template_instantiate(ParserState* state, ClassDef* template_def,
                 break;
             }
         }
-        if(!expanded) ti++;
+        ti++;
     }
 
-    // Closing brace
+    // Closing delimiter
     new_tokens[ti].kind = TT_PUNCT;
-    new_tokens[ti].value = "}";
+    new_tokens[ti].value = is_tuple ? ")" : "}";
     new_tokens[ti].file = ref_tok->file;
     new_tokens[ti].line = ref_tok->line;
     ti++;
@@ -3528,7 +4057,7 @@ ClassDef* class_template_instantiate(ParserState* state, ClassDef* template_def,
     sub_tokens->size = ti;
 
     // Create a ParserState for the sub-tokens
-    ParserState sub_state;
+    ParserState sub_state = {0};
     sub_state.tokens = sub_tokens;
     sub_state.index = -1;
     sub_state.scope = symbol_table_make();
@@ -3542,14 +4071,13 @@ ClassDef* class_template_instantiate(ParserState* state, ClassDef* template_def,
     sub_state.current_trait_generic_count = 0;
     sub_state.current_trait_generic_names = NULL;
     sub_state.current_return_type = NULL;
-    sub_state.suppress_class_ref = 0;
     sub_state.current_func_generic_count = 0;
     sub_state.current_func_generic_names = NULL;
 
-    // Parse the concrete class
+    // Parse the concrete aggregate
     Token t = next(&sub_state);
-    if(t.kind != TT_KEYWORD || !equal(t, "class")){
-        fprintf(stderr, "internal error: expected 'class' in generic instantiation\n");
+    if(t.kind != TT_KEYWORD || !(equal(t, "struct") || equal(t, "tuple"))){
+        fprintf(stderr, "internal error: expected 'struct'/'tuple' in generic instantiation\n");
         exit(1);
     }
 
@@ -3567,8 +4095,8 @@ ClassDef* class_template_instantiate(ParserState* state, ClassDef* template_def,
         }
     }
 
-    // Call parse_class_def on the sub-tokens
-    char* concrete_name = parse_class_def(&sub_state);
+    // Call parse_tuple_def/parse_struct_def on the sub-tokens
+    char* concrete_name = is_tuple ? parse_tuple_def(&sub_state) : parse_struct_def(&sub_state);
 
     // Look up the newly created class
     ClassDef* concrete = class_table_lookup(concrete_name);
@@ -3578,9 +4106,22 @@ ClassDef* class_template_instantiate(ParserState* state, ClassDef* template_def,
     }
 
     concrete->mangled_name = mangled;
+    concrete->template_def = template_def;
+    concrete->type_args = type_args;
+    concrete->type_arg_count = type_arg_count;
 
     // Cache the instantiation
     hashmap_put(&generic_class_instances, mangled, concrete);
+
+    // Merge methods from nested generic instantiations performed while parsing
+    // this class body (e.g. `new List<bool>()` inside Stack's constructor).
+    ConcreteClassMethodsList* nested = sub_state.generic_methods_head;
+    while(nested){
+        ConcreteClassMethodsList* nxt = nested->next;
+        nested->next = state->generic_methods_head;
+        state->generic_methods_head = nested;
+        nested = nxt;
+    }
 
     // Add concrete class methods to pending list for AST collection
     ConcreteClassMethodsList* item = malloc(sizeof(ConcreteClassMethodsList));
@@ -3596,14 +4137,15 @@ ClassDef* class_template_instantiate(ParserState* state, ClassDef* template_def,
 static Node* parse_method_def(ParserState* state, char* class_name, AccessModifier access){
     expect(state, "function");
     Token mname = next(state);
-    if(mname.kind != TT_IDENT && !(mname.kind == TT_KEYWORD && equal(mname, "new"))){
+    if(mname.kind != TT_IDENT){
         fprintf(stderr, "parse error: expected method name, got '%s' at %s:%lu:%lu\n",
                 mname.value, mname.file, mname.line, mname.column);
         exit(1);
     }
     expect(state, "(");
 
-    int is_constructor = (strcmp(mname.value, "new") == 0);
+    // A method whose name matches the struct is the constructor.
+    int is_constructor = (strcmp(mname.value, class_name) == 0);
 
     // Create scope for method
     SymbolTable* prev_scope = state->scope;
@@ -3611,10 +4153,10 @@ static Node* parse_method_def(ParserState* state, char* class_name, AccessModifi
     state->scope = symbol_table_make();
     state->stack_offset = 0;
 
-    // Add 'this' as first parameter
+    // Add 'this' as first parameter (a pointer to the struct)
     Node* this_param = make_node(ND_PARAM);
     this_param->param.name = "this";
-    this_param->param.type = ref_type(struct_type(struct_table_lookup(class_name)));
+    this_param->param.type = pointer_to(struct_type(struct_table_lookup(class_name)));
 
     NodeList* params = make_nodelist();
     nodelist_add(params, this_param);
@@ -3648,15 +4190,20 @@ static Node* parse_method_def(ParserState* state, char* class_name, AccessModifi
     }
     expect(state, ")");
 
-    // Build mangled name: ClassName_methodName
+    // Build mangled name. Constructors: ClassName_ctor_N. Methods include the
+    // parameter types (excluding 'this'), so they can be overloaded.
     char* full_name = NULL;
     if(is_constructor){
         int param_count = (int)params->length - 1; // exclude 'this'
-        full_name = malloc(strlen(class_name) + 1 + strlen(mname.value) + 32);
-        sprintf(full_name, "%s_%s_%d", class_name, mname.value, param_count);
+        full_name = malloc(strlen(class_name) + 16);
+        sprintf(full_name, "%s_ctor_%d", class_name, param_count);
     } else {
-        full_name = malloc(strlen(class_name) + 1 + strlen(mname.value) + 1);
-        sprintf(full_name, "%s_%s", class_name, mname.value);
+        char* base = malloc(strlen(class_name) + 1 + strlen(mname.value) + 1);
+        sprintf(base, "%s_%s", class_name, mname.value);
+        NodeList* decl = make_nodelist();
+        for(uint64_t i = 1; i < params->length; i++) nodelist_add(decl, params->nodes[i]);
+        full_name = make_func_mangled_name(base, decl);
+        free(base);
     }
 
     // Parse return type
@@ -3706,6 +4253,12 @@ static Node* parse_method_def(ParserState* state, char* class_name, AccessModifi
     node->funcdef.scope = (void*)state->scope;
     node->funcdef.return_type = return_type;
     node->funcdef.is_extern = (body == NULL);
+
+    // Register methods in the overload table so calls can be resolved by
+    // parameter types (mangled_name -> funcdef).
+    if(!is_constructor && !node->funcdef.is_extern){
+        function_table_add(full_name, node);
+    }
 
     state->scope = prev_scope;
     state->stack_offset = prev_stack_offset;
@@ -3814,11 +4367,14 @@ static Node* parse_generic_func_template(ParserState* state, Token name){
 
     int type_param_count = 0;
     char** type_params = NULL;
+    char** type_param_bounds = NULL;
     while(true){
         Token tp = expect_ident(state);
         type_param_count++;
         type_params = realloc(type_params, sizeof(char*) * type_param_count);
         type_params[type_param_count - 1] = tp.value;
+        type_param_bounds = realloc(type_param_bounds, sizeof(char*) * type_param_count);
+        type_param_bounds[type_param_count - 1] = parse_type_param_bounds(state);
         if(!equal(peek(state), ",")) break;
         next(state);
     }
@@ -3834,6 +4390,7 @@ static Node* parse_generic_func_template(ParserState* state, Token name){
     GenericFuncTemplate* tmpl = calloc(1, sizeof(GenericFuncTemplate));
     tmpl->name = name.value;
     tmpl->type_param_names = type_params;
+    tmpl->type_param_bounds = type_param_bounds;
     tmpl->type_param_count = type_param_count;
     tmpl->tokens = state->tokens;
     tmpl->file_dir = state->current_file_dir;
@@ -3897,13 +4454,18 @@ static Node* parse_generic_func_template(ParserState* state, Token name){
     state->current_func_generic_names = saved_names;
 
     // Register the template (no funcdef is emitted for the template itself).
+    // Templates with the same name but a different signature coexist.
     if(!generic_func_templates.buckets) generic_func_templates = (HashMap){0};
     GenericFuncTemplate* existing = generic_func_template_lookup(tmpl->name);
-    if(existing){
-        fprintf(stderr, "parse error: duplicate generic function template '%s' at %s:%lu:%lu\n",
-                name.value, name.file, name.line, name.column);
-        exit(1);
+    for(GenericFuncTemplate* e = existing; e; e = e->next){
+        if(e->type_param_count == tmpl->type_param_count &&
+           e->params->length == tmpl->params->length){
+            fprintf(stderr, "parse error: duplicate generic function template '%s' at %s:%lu:%lu\n",
+                    name.value, name.file, name.line, name.column);
+            exit(1);
+        }
     }
+    tmpl->next = existing;
     hashmap_put(&generic_func_templates, strdup(tmpl->name), tmpl);
 
     return NULL;
@@ -4027,6 +4589,8 @@ static Node* parse_funcdef(ParserState* state){
     }
     node->funcdef.name = mangled;
     function_table_add(mangled, node);
+    // Register the source name so the function can be used as a value.
+    register_function_name(name.value, node);
     return node;
 }
 
@@ -4078,7 +4642,7 @@ Type* parse_type_string(const char* str, ParserState* state, const char* filenam
     f.content = (char*)str;
     TokenList* sub_tokens = tokenize_file(&f);
 
-    ParserState sub_state;
+    ParserState sub_state = {0};
     sub_state.tokens = sub_tokens;
     sub_state.index = -1;
     sub_state.scope = symbol_table_make();
@@ -4124,7 +4688,7 @@ Type* parse_type_string(const char* str, ParserState* state, const char* filenam
 }
 
 Node* parse(TokenList* tokens){
-    ParserState state;
+    ParserState state = {0};
     if(!imported_files.buckets)
         imported_files = (HashMap){0};
     if(shared_global_scope == NULL)
@@ -4141,7 +4705,6 @@ Node* parse(TokenList* tokens){
     state.current_trait_generic_count = 0;
     state.current_trait_generic_names = NULL;
     state.current_return_type = NULL;
-    state.suppress_class_ref = 0;
     state.current_func_generic_count = 0;
     state.current_func_generic_names = NULL;
 
@@ -4172,13 +4735,13 @@ Node* parse(TokenList* tokens){
         else if(equal(t, "enum")){
             parse_enum_def(&state);
         }
-        else if(equal(t, "struct")){
-            parse_struct_def(&state);
+        else if(equal(t, "tuple")){
+            parse_tuple_def(&state);
         }
-        else if(equal(t, "class")){
-            char* class_name = parse_class_def(&state);
+        else if(equal(t, "struct")){
+            char* struct_name = parse_struct_def(&state);
             // Add all method function defs to children
-            ClassDef* cdef = class_table_lookup(class_name);
+            ClassDef* cdef = class_table_lookup(struct_name);
             for(uint64_t i = 0; i < cdef->methods->length; i++){
                 nodelist_add(ast->program_node.children, cdef->methods->nodes[i]);
             }

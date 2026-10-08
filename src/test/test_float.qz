@@ -21,5 +21,6 @@ function main() {
     // float comparison
     var j: bool = a > b
 
-    exit i
+    if(i == 8) exit 0
+    exit 1
 }

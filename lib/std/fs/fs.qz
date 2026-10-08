@@ -1,0 +1,218 @@
+/*
+    @std/fs/fs.qz
+    Filesystem operations: existence, directories, rename, and whole-file
+    reads/writes.
+
+    Paths are plain `string`s. They are converted to NUL-terminated C strings
+    internally, so paths built at runtime (not just literals) work.
+*/
+import "@std/syscall.qz"
+import "@std/io/fd.qz"
+import "@std/core/result.qz"
+import "@std/text/builder.qz"
+
+// open(2) flags
+const O_RDONLY: int64 = 0
+const O_WRONLY: int64 = 1
+const O_RDWR: int64 = 2
+const O_CREAT: int64 = 64
+const O_TRUNC: int64 = 512
+const O_APPEND: int64 = 1024
+const O_DIRECTORY: int64 = 65536
+
+// Syscall numbers (x86-64 Linux)
+const SYS_OPEN: int64 = 2
+const SYS_CLOSE: int64 = 3
+const SYS_GETCWD: int64 = 79
+const SYS_CHDIR: int64 = 80
+const SYS_RENAME: int64 = 82
+const SYS_MKDIR: int64 = 83
+const SYS_RMDIR: int64 = 84
+const SYS_UNLINK: int64 = 87
+
+// Default file/directory permissions (rwxr-xr-x)
+const MODE_DEFAULT: int64 = 493
+
+/*
+    A NUL-terminated copy of `s`. The caller owns the buffer.
+*/
+function cstring(s: string) : ptr<char> {
+    var buffer = new char[s.length + 1]
+    var i: uint64 = 0
+    while(i < s.length) {
+        buffer[i] = s[i]
+        i += 1
+    }
+    buffer[s.length] = 0 as char
+    return buffer
+}
+
+/*
+    true when `path` can be opened.
+*/
+function exists(path: string) : bool {
+    var c = cstring(path)
+    defer free c
+    var fd = syscallRaw(SYS_OPEN, c as int64, O_RDONLY, 0, 0, 0, 0)
+    if(fd < 0) return false
+    syscallRaw(SYS_CLOSE, fd, 0, 0, 0, 0, 0)
+    return true
+}
+
+/*
+    true when `path` is a directory.
+*/
+function isDir(path: string) : bool {
+    var c = cstring(path)
+    defer free c
+    var fd = syscallRaw(SYS_OPEN, c as int64, O_RDONLY || O_DIRECTORY, 0, 0, 0, 0)
+    if(fd < 0) return false
+    syscallRaw(SYS_CLOSE, fd, 0, 0, 0, 0, 0)
+    return true
+}
+
+/*
+    true when `path` is a regular file (not a directory).
+*/
+function isFile(path: string) : bool {
+    if(not exists(path)) return false
+    return not isDir(path)
+}
+
+/*
+    Creates the directory `path`. Returns true on success.
+*/
+function makeDir(path: string) : bool {
+    var c = cstring(path)
+    defer free c
+    return syscallRaw(SYS_MKDIR, c as int64, MODE_DEFAULT, 0, 0, 0, 0) == 0
+}
+
+/*
+    Removes the empty directory `path`.
+*/
+function removeDir(path: string) : bool {
+    var c = cstring(path)
+    defer free c
+    return syscallRaw(SYS_RMDIR, c as int64, 0, 0, 0, 0, 0) == 0
+}
+
+/*
+    Removes the file `path`.
+*/
+function removeFile(path: string) : bool {
+    var c = cstring(path)
+    defer free c
+    return syscallRaw(SYS_UNLINK, c as int64, 0, 0, 0, 0, 0) == 0
+}
+
+/*
+    Renames `from` to `to`.
+*/
+function rename(from: string, to: string) : bool {
+    var a = cstring(from)
+    defer free a
+    var b = cstring(to)
+    defer free b
+    return syscallRaw(SYS_RENAME, a as int64, b as int64, 0, 0, 0, 0) == 0
+}
+
+/*
+    Changes the working directory to `path`.
+*/
+function changeDir(path: string) : bool {
+    var c = cstring(path)
+    defer free c
+    return syscallRaw(SYS_CHDIR, c as int64, 0, 0, 0, 0, 0) == 0
+}
+
+/*
+    The current working directory. The caller owns the returned buffer.
+*/
+function currentDir() : string {
+    var buffer = new char[4096]
+    var r = syscallRaw(SYS_GETCWD, buffer as int64, 4096, 0, 0, 0, 0)
+    if(r < 0) {
+        free buffer
+        return ""
+    }
+    var len: uint64 = 0
+    while(buffer[len] != 0 as char) {
+        len += 1
+    }
+    var result: string
+    result.ptr = buffer
+    result.length = len
+    return result
+}
+
+/*
+    Reads the whole file at `path`.
+
+    Returns:
+        - Ok(string) with the file contents (the caller owns the buffer)
+        - Err(negative errno) on failure
+*/
+function readFile(path: string) : Result<string, int64> {
+    var c = cstring(path)
+    defer free c
+    var fd = syscallRaw(SYS_OPEN, c as int64, O_RDONLY, 0, 0, 0, 0)
+    if(fd < 0) return Result.Err(fd)
+    defer syscallRaw(SYS_CLOSE, fd, 0, 0, 0, 0, 0)
+
+    var builder = new StringBuilder(256)
+    defer builder.release()
+    var chunk = new char[4096]
+    defer free chunk
+
+    while(true) {
+        var block: char[]
+        block.ptr = chunk
+        block.length = 4096
+        var n = fdRead(fd, block)
+        if(n <= 0) break
+        var i: uint64 = 0
+        while(i < (n as uint64)) {
+            builder.append(chunk[i])
+            i += 1
+        }
+    }
+    return Result.Ok(builder.build())
+}
+
+/*
+    Writes `data` to `path`, creating or truncating it. Returns true on
+    success.
+*/
+function writeFile(path: string, data: string) : bool {
+    var c = cstring(path)
+    defer free c
+    var flags = O_WRONLY || O_CREAT || O_TRUNC
+    var fd = syscallRaw(SYS_OPEN, c as int64, flags, MODE_DEFAULT, 0, 0, 0)
+    if(fd < 0) return false
+    defer syscallRaw(SYS_CLOSE, fd, 0, 0, 0, 0, 0)
+
+    var block: char[]
+    block.ptr = data.ptr
+    block.length = data.length
+    var written = fdWrite(fd, block)
+    return written == (data.length as int64)
+}
+
+/*
+    Appends `data` to `path`, creating it if needed. Returns true on success.
+*/
+function appendFile(path: string, data: string) : bool {
+    var c = cstring(path)
+    defer free c
+    var flags = O_WRONLY || O_CREAT || O_APPEND
+    var fd = syscallRaw(SYS_OPEN, c as int64, flags, MODE_DEFAULT, 0, 0, 0)
+    if(fd < 0) return false
+    defer syscallRaw(SYS_CLOSE, fd, 0, 0, 0, 0, 0)
+
+    var block: char[]
+    block.ptr = data.ptr
+    block.length = data.length
+    var written = fdWrite(fd, block)
+    return written == (data.length as int64)
+}

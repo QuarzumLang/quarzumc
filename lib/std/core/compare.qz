@@ -1,0 +1,82 @@
+/*
+    @std/core/compare.qz
+    Equality, ordering and hashing for the primitive types and `string`.
+
+    These are overloaded free functions so that generic code can use them
+    after monomorphization (the language has no trait bounds yet). For a
+    user-defined struct, provide your own `equals`/`compare`/`hashValue`
+    overloads, or implement the traits from `@std/core/traits.qz`.
+*/
+
+// ---------------------------------------------------------------------------
+// equals
+// ---------------------------------------------------------------------------
+function equals(a: int8, b: int8): bool => a == b
+function equals(a: int16, b: int16): bool => a == b
+function equals(a: int32, b: int32): bool => a == b
+function equals(a: int64, b: int64): bool => a == b
+function equals(a: uint8, b: uint8): bool => a == b
+function equals(a: uint16, b: uint16): bool => a == b
+function equals(a: uint32, b: uint32): bool => a == b
+function equals(a: uint64, b: uint64): bool => a == b
+function equals(a: char, b: char): bool => a == b
+function equals(a: bool, b: bool): bool => a == b
+function equals(a: float32, b: float32): bool => a == b
+function equals(a: float64, b: float64): bool => a == b
+function equals(a: string, b: string): bool => a == b
+
+// ---------------------------------------------------------------------------
+// compare: negative / zero / positive
+// ---------------------------------------------------------------------------
+function compare(a: int8, b: int8): int64 => a < b ? -1 : (a > b ? 1 : 0)
+function compare(a: int16, b: int16): int64 => a < b ? -1 : (a > b ? 1 : 0)
+function compare(a: int32, b: int32): int64 => a < b ? -1 : (a > b ? 1 : 0)
+function compare(a: int64, b: int64): int64 => a < b ? -1 : (a > b ? 1 : 0)
+function compare(a: uint8, b: uint8): int64 => a < b ? -1 : (a > b ? 1 : 0)
+function compare(a: uint16, b: uint16): int64 => a < b ? -1 : (a > b ? 1 : 0)
+function compare(a: uint32, b: uint32): int64 => a < b ? -1 : (a > b ? 1 : 0)
+function compare(a: uint64, b: uint64): int64 => a < b ? -1 : (a > b ? 1 : 0)
+function compare(a: char, b: char): int64 => a < b ? -1 : (a > b ? 1 : 0)
+function compare(a: bool, b: bool): int64 => a == b ? 0 : (a ? 1 : -1)
+function compare(a: float32, b: float32): int64 => a < b ? -1 : (a > b ? 1 : 0)
+function compare(a: float64, b: float64): int64 => a < b ? -1 : (a > b ? 1 : 0)
+
+function compare(a: string, b: string): int64 {
+    var n: uint64 = a.length < b.length ? a.length : b.length
+    var i: uint64 = 0
+    while(i < n) {
+        if(a[i] != b[i]) {
+            return a[i] < b[i] ? -1 : 1
+        }
+        i += 1
+    }
+    if(a.length == b.length) return 0
+    return a.length < b.length ? -1 : 1
+}
+
+// ---------------------------------------------------------------------------
+// hashValue: FNV-1a over the value's bytes
+// ---------------------------------------------------------------------------
+const FNV_OFFSET: uint64 = 14695981039346656037
+const FNV_PRIME: uint64 = 1099511628211
+
+function hashValue(x: int8): uint64 => x as uint64
+function hashValue(x: int16): uint64 => x as uint64
+function hashValue(x: int32): uint64 => x as uint64
+function hashValue(x: int64): uint64 => x as uint64
+function hashValue(x: uint8): uint64 => x as uint64
+function hashValue(x: uint16): uint64 => x as uint64
+function hashValue(x: uint32): uint64 => x as uint64
+function hashValue(x: uint64): uint64 => x
+function hashValue(x: char): uint64 => x as uint64
+function hashValue(x: bool): uint64 => x ? 1 : 0
+
+function hashValue(s: string): uint64 {
+    var h: uint64 = FNV_OFFSET
+    var i: uint64 = 0
+    while(i < s.length) {
+        h = (h ^^ (s[i] as uint64)) * FNV_PRIME
+        i += 1
+    }
+    return h
+}

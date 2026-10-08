@@ -1,0 +1,60 @@
+/*
+    @std/io/bufwriter.qz
+    BufWriter: buffers writes to a file descriptor and flushes them in blocks.
+
+    Batching turns many small writes into few syscalls. Always `flush` (or
+    `release`) so the last block reaches the descriptor:
+
+        var f = fopen("out.txt", "w")
+        var w = new BufWriter(f.fd, 4096)
+        defer w.release()
+        w.write("hello ")
+        w.write("world")
+*/
+import "@std/io/fd.qz"
+
+struct BufWriter {
+    var fd: int64
+    var buffer: ptr<char>
+    var capacity: uint64
+    var length: uint64
+
+    function BufWriter(fd: int64, capacity: uint64) {
+        var cap = capacity < 1 ? 1 : capacity
+        this.fd = fd
+        this.capacity = cap
+        this.length = 0
+        this.buffer = new char[cap]
+    }
+
+    function writeByte(c: char) {
+        if(this.length >= this.capacity) this.flush()
+        this.buffer[this.length] = c
+        this.length = this.length + 1
+    }
+
+    function write(data: string) {
+        var i: uint64 = 0
+        while(i < data.length) {
+            this.writeByte(data[i])
+            i = i + 1
+        }
+    }
+
+    function flush() {
+        if(this.length == 0) return
+        var block: char[]
+        block.ptr = this.buffer
+        block.length = this.length
+        fdWrite(this.fd, block)
+        this.length = 0
+    }
+
+    function release() {
+        this.flush()
+        free this.buffer
+        this.buffer = null
+        this.capacity = 0
+        this.length = 0
+    }
+}

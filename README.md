@@ -8,7 +8,10 @@ Welcome to Quarzum, a compiled general programming language.
 * Enough concrete for low-level, enough abstraction for high-level
 * Easy sintax and low learning curve
 * Strong, static type system
-* Built-in memory allocation keywords
+* Unified `struct` types: instantiate by value with `Name(...)` or on the heap
+  with `new Name(...)`, which returns a `ptr<Name>`
+* Interfaces via `trait` + `implements` (no inheritance)
+* Built-in memory allocation keywords (`new` / `free`)
 * Memory ownership and security in compile-time
 
 ## How to run a Quarzum file

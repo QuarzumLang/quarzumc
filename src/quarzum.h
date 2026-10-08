@@ -135,7 +135,10 @@ typedef enum {
     ND_METHODCALL,
     ND_MEMBER_ASSIGN,
     ND_PASS,
-    ND_ENUM_PATTERN_CMP
+    ND_ENUM_PATTERN_CMP,
+    ND_DEFER,
+    ND_FUNCREF,
+    ND_INDIRECTCALL
 } NodeType;
 
 typedef enum {
@@ -222,6 +225,16 @@ struct ClassDef {
     int body_token_end;
     TokenList* body_tokens;
     char* mangled_name;
+    // A tuple is an immutable, method-less aggregate: all its fields are
+    // public and const, and no method may be called on it.
+    bool is_tuple;
+    // For a concrete generic instantiation (`List<int64>`): the template it
+    // came from and the concrete type arguments.
+    ClassDef* template_def;
+    Type** type_args;
+    int type_arg_count;
+    // Optional trait bounds per type parameter: "Ord", "Eq+Hash", or NULL.
+    char** type_param_bounds;
 };
 
 struct TraitDef {
@@ -424,6 +437,9 @@ struct Node {
             Node* target;
             Node* value;
             OpType op;
+            // Element/pointee type, when known (e.g. indexed assignment), used
+            // to pick the store width.
+            Type* target_type;
         } deref_assign;
 
         struct {
@@ -440,6 +456,9 @@ struct Node {
             char* name;
             NodeList* args;
             int temp_offset;
+            // Mangled name of the constructor to run (`Name_ctor_N`), or NULL
+            // when the aggregate has no constructor and is filled positionally.
+            char* mangled_name;
         } structcons;
 
         struct {
@@ -465,6 +484,9 @@ struct Node {
             char* method;
             NodeList* args;
             char* class_name;
+            // Resolved mangled symbol (set during type checking once the
+            // argument types are known); NULL falls back to ClassName_method.
+            char* mangled_name;
         } methodcall;
 
         struct {
@@ -474,6 +496,8 @@ struct Node {
             Node* value;
             bool is_class;
             bool is_struct;
+            // Declared type of the field, used to pick the store width.
+            Type* field_type;
         } member_assign;
 
         /*
@@ -492,6 +516,27 @@ struct Node {
             Type* resolved_type;
             bool negated;
         } enum_pattern_cmp;
+
+        // `defer stmt`: the inner statement runs when the enclosing block
+        // exits (normally, or via return/break/continue/exit), LIFO.
+        struct {
+            Node* stmt;
+        } defer_stmt;
+
+        // Reference to a function as a value: `dbl` where `dbl` is a function.
+        // `name` is the resolved mangled symbol; when the source name is
+        // overloaded, `source_name` is kept and `name` is resolved later from
+        // an expected function type.
+        struct {
+            char* name;
+            char* source_name;
+        } funcref;
+
+        // Call through a function-typed value: `f(x)`.
+        struct {
+            Node* callee;
+            NodeList* args;
+        } indirect_call;
     };
 };
 
@@ -534,7 +579,6 @@ typedef struct {
     int current_trait_generic_count;
     char** current_trait_generic_names;
     Type* current_return_type;
-    int suppress_class_ref;
     int current_func_generic_count;
     char** current_func_generic_names;
 } ParserState;
@@ -573,7 +617,6 @@ typedef enum {
     TY_FLOAT64,
     TY_ENUM,
     TY_PTR,
-    TY_REF,
     TY_FUNC,
     TY_ARRAY,
     TY_STRUCT,
@@ -604,6 +647,13 @@ struct Type {
             StructDef* struct_def;
             bool is_flexible;
             bool is_packed;
+            // Generic struct application: the template it came from and its
+            // type arguments. Set for both concrete instantiations
+            // (`List<int64>`) and deferred ones that still contain type
+            // parameters (`List<T>` in a generic function signature).
+            ClassDef* generic_template;
+            Type** type_args;
+            int type_arg_count;
         } structure;
 
         struct {
@@ -667,7 +717,6 @@ bool is_string_type(Type* ty);
 bool is_compatible(Type* t1, Type* t2);
 Type* copy_type(Type *ty);
 Type* pointer_to(Type* base);
-Type* ref_type(Type* base);
 Type* func_type(Type* return_type);
 Type* dynarray_type(Type* base);
 Type* string_type(void);
@@ -717,6 +766,10 @@ void function_table_add(const char* mangled_name, Node* funcdef);
 // Type helpers
 const char* type_kind_to_name(Type* type);
 char* make_func_mangled_name(const char* name, NodeList* params);
+
+// Resolves an overloaded function-value reference (`compare`) against an
+// expected function type, setting its mangled name and type.
+void resolve_funcref_expected(Node* node, Type* expected);
 
 // string.c
 bool starts_with(const char* str, const char* lexeme);

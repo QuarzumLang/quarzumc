@@ -1,0 +1,54 @@
+/*
+    @std/core/option.qz
+    Option<T>: a value that may be present (`Some`) or absent (`None`).
+
+    Used to model "a value or nothing" without null pointers. Combine it with
+    `match` to extract the value safely:
+
+        match(find(list, x)) {
+            case Some(v: int64) => use(v),
+            case None => useDefault()
+        }
+*/
+import "@std/core/panic.qz"
+
+enum Option<T> {
+    Some(T),
+    None
+}
+
+/*
+    true when the Option holds a value.
+*/
+function isSome<T>(option: Option<T>): bool => match(option) {
+    case Some(value: T) => true,
+    case None => false
+}
+
+/*
+    true when the Option is empty.
+*/
+function isNone<T>(option: Option<T>): bool => match(option) {
+    case Some(value: T) => false,
+    case None => true
+}
+
+/*
+    Returns the contained value, or panics if the Option is None.
+*/
+function unwrap<T>(option: Option<T>): T {
+    if(option == Option.Some(value: T)) {
+        return value
+    }
+    panic("called unwrap on a None Option")
+}
+
+/*
+    Returns the contained value, or `fallback` if the Option is None.
+*/
+function unwrapOr<T>(option: Option<T>, fallback: T): T {
+    if(option == Option.Some(value: T)) {
+        return value
+    }
+    return fallback
+}

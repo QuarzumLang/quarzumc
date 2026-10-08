@@ -1,0 +1,78 @@
+/*
+    @std/core/traits.qz
+    Core traits: the contracts the standard library and user types implement.
+
+    A trait describes a set of methods. A `struct` opts in with `implements`
+    and provides matching methods:
+
+        struct Point implements Eq<Point> {
+            var x: int64
+            var y: int64
+            function equals(other: Point): bool => this.x == other.x && this.y == other.y
+        }
+
+    Note: generic bounds (`<T: Eq>`) are not part of the language yet, so
+    generic code currently reaches these operations through the overloaded
+    free functions in `@std/core/compare.qz` after monomorphization.
+*/
+import "@std/core/option.qz"
+
+/*
+    Equality: `a.equals(b)`.
+*/
+trait Eq<T> {
+    function equals(other: T): bool
+}
+
+/*
+    Total order: `a.compare(b)` returns a negative value, zero, or a positive
+    value when `a` is respectively less than, equal to, or greater than `b`.
+*/
+trait Ord<T> {
+    function compare(other: T): int64
+}
+
+/*
+    Hashable: a stable 64-bit hash of the value.
+*/
+trait Hash {
+    function hash(): uint64
+}
+
+/*
+    Cloneable: produces an independent copy.
+*/
+trait Clone<T> {
+    function clone(): T
+}
+
+/*
+    Human-readable representation.
+*/
+trait Display {
+    function toString(): string
+}
+
+/*
+    A sequence of values produced one at a time.
+*/
+trait Iterator<T> {
+    function next(): Option<T>
+}
+
+/*
+    A sequence whose elements can be visited. Concrete collections provide
+    their own iteration method (an iterator type is built per collection).
+*/
+trait Iterable<T> {
+    function first(): Option<T>
+}
+
+/*
+    A source of raw memory. Implemented by `Arena`; the default allocator is
+    the language's `new` / `free`.
+*/
+trait Allocator {
+    function alloc(size: uint64): ptr<uint8>
+    function release()
+}

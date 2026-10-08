@@ -1,0 +1,45 @@
+// Generic functions taking generic struct types: `List<T>`, `List<Pair<T>>`.
+
+import "@std/collections/list.qz"
+import "@std/core/option.qz"
+
+tuple Pair<T> (a: T, b: T)
+
+function countAll<T>(xs: ptr<List<T>>): uint64 => xs.size()
+
+function firstOf<T>(xs: ptr<List<T>>): Option<T> => xs.first()
+
+function sumAll<T>(xs: ptr<List<T>>): T {
+    var total = xs.getUnchecked(0)
+    var i: uint64 = 1
+    while(i < xs.size()) {
+        total = total + xs.getUnchecked(i)
+        i = i + 1
+    }
+    return total
+}
+
+// Nested generic struct type in the signature.
+function firstA<T>(xs: ptr<List<Pair<T>>>): T => xs.getUnchecked(0).a
+
+function main() {
+    var xs = new List<int64>()
+    defer xs.release()
+    xs.add(10)
+    xs.add(20)
+    xs.add(30)
+
+    if(countAll(xs) != 3) return 1
+
+    var f = firstOf(xs)
+    if(not isSome(f) || unwrap(f) != 10) return 1
+
+    if(sumAll(xs) != 60) return 1
+
+    var ps = new List<Pair<int64>>()
+    defer ps.release()
+    ps.add(Pair<int64>(7, 8))
+    if(firstA(ps) != 7) return 1
+
+    return 0
+}

@@ -1,0 +1,38 @@
+// Function values: passing functions, calling through variables/fields, and
+// higher-order generics.
+
+function dbl(x: int64): int64 => x * 2
+function apply(f: (int64) => int64, x: int64): int64 => f(x)
+function twice<T>(f: (T) => T, x: T): T => f(f(x))
+
+struct Applier {
+    var f: (int64) => int64
+
+    function Applier(f: (int64) => int64) {
+        this.f = f
+    }
+
+    function run(x: int64): int64 => this.f(x)
+}
+
+function main() {
+    // Passing a function as a value.
+    if(apply(dbl, 21) != 42) return 1
+
+    // Storing a function in a variable and calling through it.
+    var g: (int64) => int64 = dbl
+    if(g(5) != 10) return 1
+
+    // Higher-order generic.
+    if(twice(dbl, 3) != 12) return 1
+
+    // Function-typed struct field.
+    var a = Applier(dbl)
+    if(a.run(4) != 8) return 1
+    if(a.f(6) != 12) return 1
+
+    var h = a.f
+    if(h(7) != 14) return 1
+
+    return 0
+}

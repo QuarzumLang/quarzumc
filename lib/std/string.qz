@@ -1,217 +1,277 @@
 /*
-    string.qz - 02/08/2026
-    String conversions and operations for the Quarzum
-    Standard Library
+    @std/string.qz
+    Operations and conversions for the primitive `string` type (a char[] slice).
+
+    `string` is the only text type; there is no wrapper struct. All operations
+    are free functions, so generic code can reach them through overloading:
+
+        var n = indexOf("hello world", "world")
+        if(isSome(n)) { /* ... */ }
 */
+import "@std/core/option.qz"
+import "@std/core/compare.qz"
+import "@std/char.qz"
 
 /*
-    Converts a char into a string.
-
-    Arguments:
-        - c: The character to be converted
-
-    Returns: 
-        - A string with length = 1
-
-    Warning:
-        Allocates 1 byte of memory, does not use
-        the original character pointer.
+    Converts a char into a new 1-character string.
 */
 function toString(c: char): string {
     var str: string
     str.length = 1
-    str.ptr = alloc char[1]
-    *((str.ptr as int64) as ptr<char>) = c
+    str.ptr = new char[1]
+    str.ptr[0] = c
     return str
 }
 
 /*
-    Converts a bool into a string.
-
-    Arguments:
-        - boolean: The boolean value to be converted
-
-    Returns: 
-        - "true" if boolean == true, "false" otherwise
+    Converts a bool into "true" or "false".
 */
-function toString(boolean: bool): string {
-    return boolean ? "true" : "false"
-}
+function toString(boolean: bool): string => boolean ? "true" : "false"
 
 /*
-    Converts an unsigned integer into a string.
+    Identity for strings (used by interpolation and generic formatting).
+*/
+function toString(value: string): string => value
 
-    Arguments:
-        - value: The value to be converted
-
-    Returns: 
-        - A string with the value in decimal
-
+/*
+    Converts an unsigned integer into its decimal representation.
 */
 function toString(value: uint64): string {
     var tmp = value
     var length: uint64 = 1
-    while(tmp >= 10){
+    while(tmp >= 10) {
         tmp /= 10
         length += 1
     }
     var str: string
     str.length = length
-    str.ptr = alloc char[length]
+    str.ptr = new char[length]
     tmp = value
     var pos = length
-    while(pos > 0){
+    while(pos > 0) {
         pos -= 1
-        var off = str.ptr as int64 + pos
-        *((off as ptr<char>)) = ((tmp % 10) + 48) as char
+        str.ptr[pos] = ((tmp % 10) + 48) as char
         tmp /= 10
     }
     return str
 }
 
 /*
-    Converts an unsigned integer into a string with a
-    fixed length, padding with zeros on the left.
+    Converts a signed integer into its decimal representation.
+*/
+function toString(value: int64): string {
+    if(value < 0) return "-" + toString((0 - value) as uint64)
+    return toString(value as uint64)
+}
 
-    Arguments:
-        - value: The value to be converted
-        - length: The minimum length of the resulting string
+/*
+    Converts a float into a decimal string with up to 6 fractional digits
+    (trailing zeros are dropped).
+*/
+function toString(value: float64): string {
+    if(value < 0.0) return "-" + toString(-value)
+    var whole = value as int64
+    var frac = value - (whole as float64)
+    var result = toString(whole)
+    if(frac > 0.0) {
+        result = result + "."
+        var digits: int64 = 0
+        while(digits < 6 and frac > 0.0) {
+            frac = frac * 10.0
+            var d = frac as int64
+            result = result + toString(d)
+            frac = frac - (d as float64)
+            digits = digits + 1
+        }
+    }
+    return result
+}
 
-    Returns: 
-        - A string with the value in decimal. If the value
-          has fewer digits than 'length', zeros are added on
-          the left until the string reaches 'length' characters.
-
-    Example:
-        toStringWithFixedLength(12, 5) == "00012"
+/*
+    Converts an unsigned integer into a string of at least `length` digits,
+    zero-padded on the left.
 */
 function toStringWithFixedLength(value: uint64, length: uint64): string {
     var tmp = value
     var digits: uint64 = 1
-    while(tmp >= 10){
+    while(tmp >= 10) {
         tmp /= 10
         digits += 1
     }
     if(digits > length) length = digits
     var str: string
     str.length = length
-    str.ptr = alloc char[length]
+    str.ptr = new char[length]
     tmp = value
     var pos = length
-    while(pos > 0){
+    while(pos > 0) {
         pos -= 1
-        var off = str.ptr as int64 + pos
-        *((off as ptr<char>)) = ((tmp % 10) + 48) as char
+        str.ptr[pos] = ((tmp % 10) + 48) as char
         tmp /= 10
     }
     return str
 }
 
 /*
-    Checks if the first string starts with the second string.
-
-    Arguments:
-        - str1: The first string
-        - str2: The string to be compared as a prefix
-
-    Returns:
-        - false if str2 is larger than str1
-        - true if str1 starts with str2, false otherwise
+    true when `str` starts with `prefix`.
 */
-function startsWith(str1: string, str2: string): bool {
-    if(str2.length > str1.length) return false
-    for(var i: uint64 = 0; i < str2.length; i += 1){
-        if(str1[i] != str2[i]) return false
+function startsWith(str: string, prefix: string): bool {
+    if(prefix.length > str.length) return false
+    for(var i: uint64 = 0; i < prefix.length; i += 1) {
+        if(str[i] != prefix[i]) return false
     }
     return true
 }
 
 /*
-    Checks if the first string ends with the second string.
-
-    Arguments:
-        - str1: The first string
-        - str2: The string to be compared as a suffix
-
-    Returns:
-        - false if str2 is larger than str1
-        - true if str1 ends with str2, false otherwise
+    true when `str` ends with `suffix`.
 */
-function endsWith(str1: string, str2: string): bool {
-    if(str2.length > str1.length) return false 
-    const offset = str1.length - str2.length
-    var i: int64 = 0
-    while(i < str2.length){
-        if(str1[offset + i] != str2[i]) return false
+function endsWith(str: string, suffix: string): bool {
+    if(suffix.length > str.length) return false
+    const offset = str.length - suffix.length
+    var i: uint64 = 0
+    while(i < suffix.length) {
+        if(str[offset + i] != suffix[i]) return false
         i += 1
     }
     return true
 }
 
 /*
-    Obtains a substring from an existing string.
-
-    Arguments:
-        - str: The original string
-        - start: The start index of the substring
-        - end: The end index of the substring
-
-    Returns:
-        - A partial view of the original string
-
-    Warning:
-        - Does not create a new string
+    A zero-copy view of `str[start, end)`.
 */
 function substring(str: string, start: uint64, end: uint64): string {
     var result: string
-    result.pointer = (str.ptr as int64 + start) as ptr<char>
+    result.ptr = (str.ptr as int64 + start) as ptr<char>
     result.length = end - start
     return result
 }
 
 /*
-    Copies a portion of a string into a new string.
-
-    Arguments:
-        - str: The source string
-        - start: The start index of the portion
-        - length: The number of characters to copy
-
-    Returns:
-        - A new string with a deep copy of the portion
-
-    Warning:
-        - Allocates 'length' bytes of memory; the caller owns
-          the returned buffer.
+    A deep copy of `length` characters of `str` starting at `start`. The caller
+    owns the returned buffer.
 */
 function slice(str: string, start: uint64, length: uint64): string {
     var result: string
     result.length = length
-    result.ptr = alloc char[length]
+    result.ptr = new char[length]
     var i: uint64 = 0
-    while(i < length){
-        *((result.ptr as int64 + i) as ptr<char>) = str[start + i]
+    while(i < length) {
+        result.ptr[i] = str[start + i]
         i += 1
     }
     return result
 }
 
+/*
+    First index of `needle` in `str`, or None.
+*/
+function indexOf(str: string, needle: string): Option<uint64> {
+    if(needle.length == 0) return Option.Some(0)
+    if(needle.length > str.length) return Option.None
+    var i: uint64 = 0
+    while(i + needle.length <= str.length) {
+        var j: uint64 = 0
+        var found = true
+        while(j < needle.length) {
+            if(str[i + j] != needle[j]) {
+                found = false
+                break
+            }
+            j += 1
+        }
+        if(found) return Option.Some(i)
+        i += 1
+    }
+    return Option.None
+}
 
+/*
+    true when `needle` appears in `str`.
+*/
+function contains(str: string, needle: string): bool => isSome(indexOf(str, needle))
+
+/*
+    The character at `index`, or None if out of bounds.
+*/
+function charAt(str: string, index: uint64): Option<char> {
+    if(index >= str.length) return Option.None
+    return Option.Some(str[index])
+}
+
+/*
+    Concatenates two strings into a new one.
+*/
+function concat(a: string, b: string): string => a + b
+
+/*
+    A view of `str` without leading and trailing whitespace.
+*/
+function trim(str: string): string {
+    var start: uint64 = 0
+    var end: uint64 = str.length
+    while(start < end and isWhitespace(str[start])) start += 1
+    while(end > start and isWhitespace(str[end - 1])) end -= 1
+    return substring(str, start, end)
+}
+
+/*
+    A new string with every lowercase ASCII letter uppercased.
+*/
+function toUpperCase(str: string): string {
+    var out = new char[str.length]
+    var i: uint64 = 0
+    while(i < str.length) {
+        var c = str[i]
+        if(c >= 'a' and c <= 'z') c = ((c as uint64) - 32) as char
+        out[i] = c
+        i += 1
+    }
+    var result: string
+    result.ptr = out
+    result.length = str.length
+    return result
+}
+
+/*
+    A new string with every uppercase ASCII letter lowercased.
+*/
+function toLowerCase(str: string): string {
+    var out = new char[str.length]
+    var i: uint64 = 0
+    while(i < str.length) {
+        var c = str[i]
+        if(c >= 'A' and c <= 'Z') c = ((c as uint64) + 32) as char
+        out[i] = c
+        i += 1
+    }
+    var result: string
+    result.ptr = out
+    result.length = str.length
+    return result
+}
+
+/*
+    Parses a decimal unsigned integer (no sign, no whitespace).
+*/
 function decimalToUInt64(text: string): uint64 {
     var value: uint64 = 0
     var i: uint64 = 0
-    while(i < text.length){
+    while(i < text.length) {
         value = value * 10 + ((text[i] as uint64) - 48)
         i += 1
     }
     return value
 }
 
+/*
+    Parses a hexadecimal integer, with or without a `0x` prefix.
+*/
 function hexToUInt64(text: string): uint64 {
     var value: uint64 = 0
     var i: uint64 = 0
     if(text.length >= 2 and text[0] == '0' and (text[1] == 'x' or text[1] == 'X')) i = 2
-    while(i < text.length){
+    while(i < text.length) {
         var digit: uint64 = 0
         if(text[i] >= '0' and text[i] <= '9') digit = (text[i] as uint64) - 48
         else if(text[i] >= 'a' and text[i] <= 'f') digit = (text[i] as uint64) - 87
@@ -222,18 +282,21 @@ function hexToUInt64(text: string): uint64 {
     return value
 }
 
+/*
+    Parses a decimal floating point number (integer and fractional parts).
+*/
 function stringToFloat64(text: string): float64 {
     var value = 0.0 as float64
     var i: uint64 = 0
-    while(i < text.length and text[i] != '.'){
+    while(i < text.length and text[i] != '.') {
         var digit = (text[i] as uint64) - 48
         value = value * (10.0 as float64) + (digit as float64)
         i += 1
     }
-    if(i < text.length and text[i] == '.'){
+    if(i < text.length and text[i] == '.') {
         i += 1
         var scale = 1.0 as float64
-        while(i < text.length){
+        while(i < text.length) {
             var fdigit = (text[i] as uint64) - 48
             scale = scale * (0.1 as float64)
             value = value + (fdigit as float64) * scale

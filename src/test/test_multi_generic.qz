@@ -13,8 +13,8 @@ function main(){
 
     var listSize: uint64 = l.size()
     var stackSize: uint64 = s.size()
-    if(listSize == 3 && stackSize == 2){
-        return 1
+    if(listSize == 3 and stackSize == 2){
+        return 0
     }
-    return 0
+    return 1
 }

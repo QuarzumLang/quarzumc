@@ -1,0 +1,50 @@
+// Sorting List<T> with comparators, including the overloaded core `compare`
+// disambiguated by a cast.
+
+import "@std/collections/list.qz"
+import "@std/collections/sort.qz"
+import "@std/core/compare.qz"
+
+function cmpInt(a: int64, b: int64): int64 => a - b
+
+function main() {
+    var xs = new List<int64>()
+    defer xs.release()
+    xs.add(5)
+    xs.add(1)
+    xs.add(4)
+    xs.add(2)
+    xs.add(3)
+    sort(xs, cmpInt)
+    if(xs.getUnchecked(0) != 1 || xs.getUnchecked(4) != 5) return 1
+
+    // Overloaded `compare` resolved by the cast.
+    var ys = new List<int64>()
+    defer ys.release()
+    ys.add(9)
+    ys.add(7)
+    ys.add(8)
+    sort(ys, compare as (int64, int64) => int64)
+    if(ys.getUnchecked(0) != 7 || ys.getUnchecked(2) != 9) return 1
+
+    var ss = new List<string>()
+    defer ss.release()
+    ss.add("banana")
+    ss.add("apple")
+    ss.add("cherry")
+    sort(ss, compare as (string, string) => int64)
+    if(ss.getUnchecked(0) != "apple") return 1
+
+    // `sorted` returns a copy; the original is unchanged.
+    var zs = new List<int64>()
+    defer zs.release()
+    zs.add(3)
+    zs.add(1)
+    zs.add(2)
+    var s = sorted(zs, cmpInt)
+    defer s.release()
+    if(zs.getUnchecked(0) != 3) return 1
+    if(s.getUnchecked(0) != 1) return 1
+
+    return 0
+}

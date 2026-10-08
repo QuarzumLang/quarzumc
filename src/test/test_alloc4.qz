@@ -1,9 +1,10 @@
 function main() {
-    var arr = alloc int64[3]
+    var arr = new int64[3]
     *arr = 10
-    *(arr + 8) = 20
-    *(arr + 16) = 30
-    var total = *arr + *(arr + 8) + *(arr + 16)
+    *((arr as int64 + 8) as ptr<int64>) = 20
+    *((arr as int64 + 16) as ptr<int64>) = 30
+    var total = *arr + *((arr as int64 + 8) as ptr<int64>) + *((arr as int64 + 16) as ptr<int64>)
     free arr
-    exit total
+    if(total == 60) exit 0
+    exit 1
 }

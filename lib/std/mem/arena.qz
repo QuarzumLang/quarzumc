@@ -1,0 +1,75 @@
+/*
+    @std/mem/arena.qz - bump allocator
+
+    An Arena allocates from one contiguous block with a moving cursor. It is
+    the fastest way to allocate many short-lived objects: `alloc` is O(1) and
+    there is no per-object free. `reset` reuses the block, `release` frees it.
+
+    Typical use, with `defer`:
+
+        var a = new Arena(64 * 1024)
+        defer a.release()
+
+        var xs = arenaAlloc<int64>(a, 1000)
+        // ... use xs ...
+        a.reset()   // reuse the same memory
+*/
+
+struct Arena {
+    var base: ptr<uint8>
+    var capacity: uint64
+    var used: uint64
+
+    function Arena(capacity: uint64) {
+        this.base = new uint8[capacity]
+        this.capacity = capacity
+        this.used = 0
+    }
+
+    /*
+        Allocates `size` bytes, aligned to 8. Returns null when the request
+        does not fit in the remaining space.
+    */
+    function alloc(size: uint64) : ptr<uint8> {
+        var start = ((this.used + 7) / 8) * 8
+        if(start + size > this.capacity) return null
+        this.used = start + size
+        return (this.base as int64 + start) as ptr<uint8>
+    }
+
+    /*
+        Bytes still available in the block.
+    */
+    function remaining() : uint64 => this.capacity - this.used
+
+    /*
+        Rewinds the cursor so the whole block can be reused. The memory is not
+        zeroed and previously handed-out pointers become invalid.
+    */
+    function reset() {
+        this.used = 0
+    }
+
+    /*
+        Frees the backing block. The arena must not be used afterwards.
+    */
+    function release() {
+        free this.base
+        this.base = null
+        this.capacity = 0
+        this.used = 0
+    }
+}
+
+/*
+    Allocates an array of `count` elements of type `T` from the arena.
+
+    Returns:
+        - A pointer to the first element, or null if it does not fit.
+
+    Example:
+        var xs = arenaAlloc<int64>(arena, 100)
+*/
+function arenaAlloc<T>(arena: ptr<Arena>, count: uint64) : ptr<T> {
+    return arena.alloc(count * sizeof(T)) as ptr<T>
+}

@@ -1,0 +1,63 @@
+import "@std/core/option.qz"
+import "@std/core/result.qz"
+import "@std/core/compare.qz"
+import "@std/core/traits.qz"
+
+function findValue(x: int64): Option<int64> {
+    if(x > 0) return Option.Some(x)
+    return Option.None
+}
+
+function checkedDiv(a: int64, b: int64): Result<int64, int64> {
+    if(b == 0) return Result.Err(-1)
+    return Result.Ok(a / b)
+}
+
+// Generic code reaching equality through the overloaded core function.
+function same<T>(a: T, b: T): bool => equals(a, b)
+
+struct Point implements Eq<Point> {
+    var x: int64
+    var y: int64
+
+    function Point(x: int64, y: int64) {
+        this.x = x
+        this.y = y
+    }
+
+    function equals(other: Point): bool => this.x == other.x && this.y == other.y
+}
+
+function main() {
+    var checks = 0
+
+    // Option
+    if(isSome(findValue(5)) && unwrap(findValue(5)) == 5) checks += 1
+    if(isNone(findValue(-1))) checks += 1
+    if(unwrapOr(findValue(-1), 7) == 7) checks += 1
+
+    // Result
+    if(isOk(checkedDiv(10, 2))) checks += 1
+    if(isErr(checkedDiv(1, 0))) checks += 1
+    if(unwrap(checkedDiv(10, 2)) == 5) checks += 1
+    if(unwrapErr(checkedDiv(1, 0)) == -1) checks += 1
+    if(unwrapOr(checkedDiv(1, 0), 42) == 42) checks += 1
+
+    // compare / equals / hashValue
+    if(compare(1, 2) < 0) checks += 1
+    if(compare("b", "a") > 0) checks += 1
+    if(compare(3, 3) == 0) checks += 1
+    if(hashValue("abc") == hashValue("abc")) checks += 1
+    if(hashValue("abc") != hashValue("abd")) checks += 1
+
+    // Generic equality via monomorphization
+    if(same(3, 3) && same("hi", "hi")) checks += 1
+
+    // Trait implemented by a struct (called directly)
+    var a = Point(1, 2)
+    var b = Point(1, 2)
+    if(a.equals(b)) checks += 1
+
+    if(checks == 15) return 0
+    return 1
+}

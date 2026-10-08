@@ -1,0 +1,35 @@
+// Value-equality search helpers on List<T> (free generic functions using
+// `equals`), instantiated only when called.
+
+import "@std/collections/list.qz"
+import "@std/core/option.qz"
+
+struct P {
+    var x: int64
+
+    function P(x: int64) {
+        this.x = x
+    }
+}
+
+function equals(a: P, b: P): bool => a.x == b.x
+
+function main() {
+    var ps = new List<P>()
+    defer ps.release()
+    ps.add(P(1))
+    ps.add(P(2))
+    ps.add(P(3))
+
+    if(not listContains(ps, P(2))) return 1
+    if(listContains(ps, P(9))) return 1
+
+    if(not listRemove(ps, P(1))) return 1
+    if(ps.size() != 2) return 1
+    if(listContains(ps, P(1))) return 1
+
+    var idx = listIndexOf(ps, P(3))
+    if(not isSome(idx) || unwrap(idx) != 1) return 1
+
+    return 0
+}

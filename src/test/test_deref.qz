@@ -1,7 +1,8 @@
 function main() {
-    var p = alloc int64
+    var p = new int64
     *p = 42
     var x = *p + 1
     free p
-    exit x
+    if(x == 43) exit 0
+    exit 1
 }

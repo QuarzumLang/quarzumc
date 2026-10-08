@@ -1,0 +1,38 @@
+// Buffered file I/O: BufWriter flushes in blocks, BufReader reads lines.
+
+import "@std/file.qz"
+import "@std/io/bufwriter.qz"
+import "@std/io/bufreader.qz"
+import "@std/core/option.qz"
+
+function main() {
+    var path = "/tmp/opencode/qv_bufio_test.txt"
+
+    var f = fopen(path, "w")
+    var w = new BufWriter(f.fd, 8)
+    w.write("hello world\n")
+    w.write("second line\n")
+    w.release()
+    fclose(f)
+
+    var g = fopen(path, "r")
+    var r = new BufReader(g.fd, 8)
+
+    var l1 = r.readLine()
+    if(not isSome(l1)) return 1
+    var s1 = unwrap(l1)
+    if(s1 != "hello world") return 1
+    free s1.ptr
+
+    var l2 = r.readLine()
+    if(not isSome(l2)) return 1
+    var s2 = unwrap(l2)
+    if(s2 != "second line") return 1
+    free s2.ptr
+
+    if(isSome(r.readLine())) return 1
+
+    r.release()
+    fclose(g)
+    return 0
+}

@@ -1,0 +1,30 @@
+/*
+    @std/core/panic.qz - unrecoverable errors
+
+    `panic` reports a message on stderr and terminates the program with a
+    non-zero status. Use it for bugs (invariants that must hold), not for
+    recoverable failures: those belong in a `Result`.
+
+    This module intentionally depends only on the raw fd layer, so it can be
+    used from `core` without pulling in the higher-level I/O stack.
+*/
+import "@std/io/fd.qz"
+
+/*
+    Prints "panic: <message>" to stderr and exits with code 1.
+*/
+function panic(message: string) {
+    fdWrite(2, "panic: ")
+    fdWrite(2, message)
+    fdWrite(2, "\n")
+    exit 1
+}
+
+/*
+    Terminates with a fixed message when `condition` is false.
+*/
+function assertOrPanic(condition: bool, message: string) {
+    if(not condition) {
+        panic(message)
+    }
+}

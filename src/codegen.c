@@ -2,6 +2,8 @@
 
 static uint64_t label_count = 0;
 static HashMap strlit_table;
+// Set when @std/process globals (qz_argc/qz_argv/qz_envp) are present.
+static bool g_emit_process_globals = false;
 
 static Node* pending_global_init[256];
 static int pending_global_init_count = 0;
@@ -25,6 +27,7 @@ static uint64_t get_strlit_label(FILE* output_file, const char* str, int length)
 }
 
 #define MAX_BREAK_DEPTH 64
+#define MAX_DEFER_DEPTH 256
 
 typedef struct {
     int stack_size;
@@ -32,6 +35,12 @@ typedef struct {
     uint64_t break_labels[MAX_BREAK_DEPTH];
     uint64_t continue_labels[MAX_BREAK_DEPTH];
     int break_depth;
+    // One pending-defer list per active block (index = nesting depth).
+    NodeList* defer_lists[MAX_DEFER_DEPTH];
+    int defer_depth;
+    // Defer depth just outside each loop/switch body, so break/continue can
+    // run the defers of the blocks they exit.
+    int loop_defer_depth[MAX_BREAK_DEPTH];
 } CodegenState;
 
 static bool node_is_float(Node* node){
@@ -47,6 +56,48 @@ static bool node_is_string(Node* node){
 static bool node_is_string_like(Node* node){
     if(!node || !node->ty) return false;
     return node->ty->kind == TY_STRING || node->ty->kind == TY_ARRAY;
+}
+
+// Loads a struct/class field at [rax + offset] into rax (and rdx for slices),
+// using the field's size and signedness. Assumes the base address is in rax.
+static void gen_member_load(FILE* output_file, Type* ty, int offset){
+    if(ty && is_float(ty)){
+        if(ty->kind == TY_FLOAT64){
+            fprintf(output_file, "    movsd xmm0, [rax+%d]\n", offset);
+        } else {
+            fprintf(output_file, "    movss xmm0, [rax+%d]\n", offset);
+            fprintf(output_file, "    cvtss2sd xmm0, xmm0\n");
+        }
+        return;
+    }
+    if(ty && ty->kind == TY_STRUCT){
+        fprintf(output_file, "    lea rax, [rax+%d]\n", offset);
+        return;
+    }
+    if(ty && (ty->kind == TY_STRING || ty->kind == TY_ARRAY)){
+        fprintf(output_file, "    mov rdx, [rax+%d]\n", offset + 8);
+        fprintf(output_file, "    mov rax, [rax+%d]\n", offset);
+        return;
+    }
+    if(ty && ty->size == 1){
+        fprintf(output_file, ty->kind == TY_INT8
+                ? "    movsx rax, byte ptr [rax+%d]\n"
+                : "    movzx rax, byte ptr [rax+%d]\n", offset);
+        return;
+    }
+    if(ty && ty->size == 2){
+        fprintf(output_file, ty->kind == TY_INT16
+                ? "    movsx rax, word ptr [rax+%d]\n"
+                : "    movzx rax, word ptr [rax+%d]\n", offset);
+        return;
+    }
+    if(ty && ty->size == 4){
+        fprintf(output_file, ty->kind == TY_INT32
+                ? "    movsx rax, dword ptr [rax+%d]\n"
+                : "    mov eax, dword ptr [rax+%d]\n", offset);
+        return;
+    }
+    fprintf(output_file, "    mov rax, [rax+%d]\n", offset);
 }
 
 static void gen_int_to_float(Node* node, FILE* output_file, Type* target){
@@ -154,12 +205,61 @@ static void gen_expr(Node* node, FILE* output_file, CodegenState* state){
         fprintf(output_file, "    mov rax, 0\n");
         return;
     }
+    if(node->type == ND_FUNCREF){
+        if(!node->funcref.name){
+            fprintf(stderr, "codegen error: unresolved function value '%s'\n",
+                    node->funcref.source_name ? node->funcref.source_name : "?");
+            exit(1);
+        }
+        fprintf(output_file, "    lea rax, [rip + %s]\n", node->funcref.name);
+        return;
+    }
+    if(node->type == ND_INDIRECTCALL){
+        // Push args in reverse, load the callee, then `call rax`.
+        int total_pushed = 0;
+        NodeList* args = node->indirect_call.args;
+        for(int i = (int)args->length - 1; i >= 0; i--){
+            Node* arg = args->nodes[i];
+            gen_expr(arg, output_file, state);
+            if(node_is_float(arg)){
+                fprintf(output_file, "    movq rax, xmm0\n");
+            }
+            if(arg->ty && arg->ty->kind == TY_STRUCT){
+                int asize = arg->ty->size;
+                fprintf(output_file, "    sub rsp, %d\n", asize);
+                fprintf(output_file, "    mov rsi, rax\n");
+                fprintf(output_file, "    mov rdi, rsp\n");
+                for(int b = 0; b < asize; b += 8){
+                    fprintf(output_file, "    mov rcx, [rsi+%d]\n", b);
+                    fprintf(output_file, "    mov [rdi+%d], rcx\n", b);
+                }
+                total_pushed += asize;
+                state->stack_size += asize;
+            } else if(node_is_string_like(arg)){
+                fprintf(output_file, "    push rdx\n");
+                fprintf(output_file, "    push rax\n");
+                total_pushed += 16;
+                state->stack_size += 16;
+            } else {
+                fprintf(output_file, "    push rax\n");
+                total_pushed += 8;
+                state->stack_size += 8;
+            }
+        }
+        gen_expr(node->indirect_call.callee, output_file, state);
+        fprintf(output_file, "    call rax\n");
+        if(total_pushed > 0){
+            fprintf(output_file, "    add rsp, %d\n", total_pushed);
+            state->stack_size -= total_pushed;
+        }
+        return;
+    }
     // `pass` produces no code: it is the void literal / nop.
     if(node->type == ND_PASS){
         return;
     }
     if(node->type == ND_NEW){
-        // Allocate memory for the class instance using mmap syscall (like ND_ALLOC)
+        // Allocate memory for the struct instance using mmap syscall (like ND_ALLOC)
         StructDef* sdef = struct_table_lookup(node->new_expr.class_name);
         if(!sdef){ fprintf(stderr, "CODE GEN ERROR: struct_table_lookup('%s') failed\n", node->new_expr.class_name); exit(1); }
         int alloc_size = sdef->total_size + 8;
@@ -180,6 +280,50 @@ static void gen_expr(Node* node, FILE* output_file, CodegenState* state){
         fprintf(output_file, "    mov [rax], rcx\n");
         fprintf(output_file, "    add rax, 8\n");
         // rax = pointer to allocated memory (this)
+
+        if(!node->new_expr.mangled_name){
+            // No constructor: initialize the fields positionally.
+            fprintf(output_file, "    push r12\n");
+            state->stack_size += 8;
+            fprintf(output_file, "    mov r12, rax\n");
+            for(int i = 0; i < sdef->member_count && node->new_expr.args &&
+                        i < (int)node->new_expr.args->length; i++){
+                int field_offset = sdef->members[i].offset;
+                gen_expr(node->new_expr.args->nodes[i], output_file, state);
+                Type* mty = sdef->members[i].type;
+                if(mty->kind == TY_STRUCT){
+                    int fsize = mty->size;
+                    fprintf(output_file, "    mov rsi, rax\n");
+                    fprintf(output_file, "    lea rdi, [r12+%d]\n", field_offset);
+                    for(int b = 0; b < fsize; b += 8){
+                        fprintf(output_file, "    mov rcx, [rsi+%d]\n", b);
+                        fprintf(output_file, "    mov [rdi+%d], rcx\n", b);
+                    }
+                } else if(is_float(mty)){
+                    if(mty->kind == TY_FLOAT32){
+                        fprintf(output_file, "    cvtsd2ss xmm0, xmm0\n");
+                        fprintf(output_file, "    movss [r12+%d], xmm0\n", field_offset);
+                    } else {
+                        fprintf(output_file, "    movsd [r12+%d], xmm0\n", field_offset);
+                    }
+                } else if(mty->size == 1){
+                    fprintf(output_file, "    mov byte ptr [r12+%d], al\n", field_offset);
+                } else if(mty->size == 2){
+                    fprintf(output_file, "    mov word ptr [r12+%d], ax\n", field_offset);
+                } else if(mty->size == 4){
+                    fprintf(output_file, "    mov dword ptr [r12+%d], eax\n", field_offset);
+                } else {
+                    fprintf(output_file, "    mov [r12+%d], rax\n", field_offset);
+                    if(is_string_type(mty)){
+                        fprintf(output_file, "    mov [r12+%d], rdx\n", field_offset + 8);
+                    }
+                }
+            }
+            fprintf(output_file, "    mov rax, r12\n");
+            fprintf(output_file, "    pop r12\n");
+            state->stack_size -= 8;
+            return;
+        }
 
         // Save the object pointer
         fprintf(output_file, "    push rax\n");
@@ -278,7 +422,11 @@ static void gen_expr(Node* node, FILE* output_file, CodegenState* state){
         fprintf(output_file, "    push rax\n");
         state->stack_size += 8;
 
-        fprintf(output_file, "    call %s_%s\n", node->methodcall.class_name, node->methodcall.method);
+        if(node->methodcall.mangled_name){
+            fprintf(output_file, "    call %s\n", node->methodcall.mangled_name);
+        } else {
+            fprintf(output_file, "    call %s_%s\n", node->methodcall.class_name, node->methodcall.method);
+        }
 
         // Clean up args from stack
         fprintf(output_file, "    add rsp, %d\n", total_bytes);
@@ -352,15 +500,31 @@ static void gen_expr(Node* node, FILE* output_file, CodegenState* state){
         if(node->index_expr.is_string){
             fprintf(output_file, "    mov rdx, [rax+8]\n");
             fprintf(output_file, "    mov rax, [rax]\n");
-        } else if(node->index_expr.base && node->index_expr.base->ty &&
-                  is_string_type(node->index_expr.base->ty)){
-            fprintf(output_file, "    movzx rax, byte ptr [rax]\n");
-        } else if(node->index_expr.base && node->index_expr.base->ty &&
-                  node->index_expr.base->ty->base &&
-                  node->index_expr.base->ty->base->kind == TY_STRUCT){
-            fprintf(output_file, "    lea rax, [rax]\n");
         } else {
-            fprintf(output_file, "    mov rax, [rax]\n");
+            // Load the element with the correct width and signedness.
+            Type* bty = node->index_expr.base ? node->index_expr.base->ty : NULL;
+            Type* elem = NULL;
+            if(bty){
+                if(bty->kind == TY_PTR || bty->kind == TY_ARRAY) elem = bty->base;
+                else if(bty->kind == TY_STRING) elem = ty_char;
+            }
+            if(elem && elem->kind == TY_STRUCT){
+                fprintf(output_file, "    lea rax, [rax]\n");
+            } else if(elem && elem->size == 1){
+                fprintf(output_file, elem->kind == TY_INT8
+                        ? "    movsx rax, byte ptr [rax]\n"
+                        : "    movzx rax, byte ptr [rax]\n");
+            } else if(elem && elem->size == 2){
+                fprintf(output_file, elem->kind == TY_INT16
+                        ? "    movsx rax, word ptr [rax]\n"
+                        : "    movzx rax, word ptr [rax]\n");
+            } else if(elem && elem->size == 4){
+                fprintf(output_file, elem->kind == TY_INT32
+                        ? "    movsx rax, dword ptr [rax]\n"
+                        : "    mov eax, dword ptr [rax]\n");
+            } else {
+                fprintf(output_file, "    mov rax, [rax]\n");
+            }
         }
         return;
     }
@@ -372,47 +536,11 @@ static void gen_expr(Node* node, FILE* output_file, CodegenState* state){
             } else {
                 gen_expr(node->member.base, output_file, state);
             }
-            if(node->ty && is_float(node->ty)){
-                if(node->ty->kind == TY_FLOAT64)
-                    fprintf(output_file, "    movsd xmm0, [rax+%d]\n", node->member.field_offset);
-                else {
-                    fprintf(output_file, "    movss xmm0, [rax+%d]\n", node->member.field_offset);
-                    fprintf(output_file, "    cvtss2sd xmm0, xmm0\n");
-                }
-            } else if(node->ty && node->ty->kind == TY_STRUCT){
-                fprintf(output_file, "    lea rax, [rax+%d]\n", node->member.field_offset);
-            } else {
-                fprintf(output_file, "    lea rcx, [rax+%d]\n", node->member.field_offset);
-                if(node->ty && (node->ty->kind == TY_BOOL || node->ty->kind == TY_CHAR))
-                    fprintf(output_file, "    movzx eax, byte ptr [rcx]\n");
-                else
-                    fprintf(output_file, "    mov rax, [rcx]\n");
-                if(node->ty && is_string_type(node->ty)){
-                    fprintf(output_file, "    mov rdx, [rcx+8]\n");
-                }
-            }
+            gen_member_load(output_file, node->ty, node->member.field_offset);
         } else if(node->member.is_struct){
             // Struct value: base evaluates to a pointer to the struct
             gen_expr(node->member.base, output_file, state);
-            if(node->ty && node->ty->kind == TY_STRUCT){
-                fprintf(output_file, "    lea rax, [rax+%d]\n", node->member.field_offset);
-            } else if(node->ty && is_float(node->ty)){
-                if(node->ty->kind == TY_FLOAT64)
-                    fprintf(output_file, "    movsd xmm0, [rax+%d]\n", node->member.field_offset);
-                else {
-                    fprintf(output_file, "    movss xmm0, [rax+%d]\n", node->member.field_offset);
-                    fprintf(output_file, "    cvtss2sd xmm0, xmm0\n");
-                }
-            } else {
-                fprintf(output_file, "    lea rcx, [rax+%d]\n", node->member.field_offset);
-                if(node->ty && (node->ty->kind == TY_BOOL || node->ty->kind == TY_CHAR))
-                    fprintf(output_file, "    movzx eax, byte ptr [rcx]\n");
-                else
-                    fprintf(output_file, "    mov rax, [rcx]\n");
-                if(node->ty && is_string_type(node->ty)){
-                    fprintf(output_file, "    mov rdx, [rcx+8]\n");
-                }
-            }
+            gen_member_load(output_file, node->ty, node->member.field_offset);
         } else if(strcmp(node->member.field_name, "pointer") == 0 ||
                   strcmp(node->member.field_name, "ptr") == 0){
             gen_expr(node->member.base, output_file, state);
@@ -518,9 +646,16 @@ static void gen_expr(Node* node, FILE* output_file, CodegenState* state){
         bool is_comparison = (node->binary_expr.op >= OP_EQ && node->binary_expr.op <= OP_GE);
 
         if(both_float && !is_comparison){
+            // Preserve the left operand on the stack: evaluating the right
+            // operand may itself use xmm1.
             gen_expr(node->binary_expr.lhs, output_file, state);
-            fprintf(output_file, "    movsd xmm1, xmm0\n");
+            fprintf(output_file, "    movq rax, xmm0\n");
+            fprintf(output_file, "    push rax\n");
+            state->stack_size += 8;
             gen_expr(node->binary_expr.rhs, output_file, state);
+            fprintf(output_file, "    movsd xmm1, [rsp]\n");
+            fprintf(output_file, "    add rsp, 8\n");
+            state->stack_size -= 8;
             switch(node->binary_expr.op){
                 case OP_ADD: fprintf(output_file, "    addsd xmm0, xmm1\n"); break;
                 case OP_SUB: fprintf(output_file, "    subsd xmm1, xmm0\n    movsd xmm0, xmm1\n"); break;
@@ -534,14 +669,22 @@ static void gen_expr(Node* node, FILE* output_file, CodegenState* state){
         if(any_float && !is_comparison){
             if(!node_is_float(node->binary_expr.lhs)){
                 gen_expr(node->binary_expr.lhs, output_file, state);
-                fprintf(output_file, "    cvtsi2sd xmm1, rax\n");
-                gen_expr(node->binary_expr.rhs, output_file, state);
+                fprintf(output_file, "    cvtsi2sd xmm0, rax\n");
             } else {
                 gen_expr(node->binary_expr.lhs, output_file, state);
-                fprintf(output_file, "    movsd xmm1, xmm0\n");
+            }
+            fprintf(output_file, "    movq rax, xmm0\n");
+            fprintf(output_file, "    push rax\n");
+            state->stack_size += 8;
+            if(!node_is_float(node->binary_expr.rhs)){
                 gen_expr(node->binary_expr.rhs, output_file, state);
                 fprintf(output_file, "    cvtsi2sd xmm0, rax\n");
+            } else {
+                gen_expr(node->binary_expr.rhs, output_file, state);
             }
+            fprintf(output_file, "    movsd xmm1, [rsp]\n");
+            fprintf(output_file, "    add rsp, 8\n");
+            state->stack_size -= 8;
             switch(node->binary_expr.op){
                 case OP_ADD: fprintf(output_file, "    addsd xmm0, xmm1\n"); break;
                 case OP_SUB: fprintf(output_file, "    subsd xmm1, xmm0\n    movsd xmm0, xmm1\n"); break;
@@ -556,27 +699,21 @@ static void gen_expr(Node* node, FILE* output_file, CodegenState* state){
             Type* left_type = node->binary_expr.lhs->ty;
             Type* right_type = node->binary_expr.rhs->ty;
 
-            if(is_float(left_type)){
-                gen_expr(node->binary_expr.lhs, output_file, state);
-                fprintf(output_file, "    movsd xmm1, xmm0\n");
-                gen_expr(node->binary_expr.rhs, output_file, state);
-                if(!is_float(right_type)){
-                    fprintf(output_file, "    cvtsi2sd xmm0, rax\n");
-                }
-                fprintf(output_file, "    ucomisd xmm1, xmm0\n");
-            } else {
-                gen_expr(node->binary_expr.lhs, output_file, state);
-                fprintf(output_file, "    push rax\n");
-                state->stack_size += 8;
-                gen_expr(node->binary_expr.rhs, output_file, state);
-                fprintf(output_file, "    movsd xmm1, xmm0\n");
-                fprintf(output_file, "    pop rax\n");
-                state->stack_size -= 8;
-                if(!is_float(left_type)){
-                    fprintf(output_file, "    cvtsi2sd xmm0, rax\n");
-                }
-                fprintf(output_file, "    ucomisd xmm0, xmm1\n");
+            gen_expr(node->binary_expr.lhs, output_file, state);
+            if(!is_float(left_type)){
+                fprintf(output_file, "    cvtsi2sd xmm0, rax\n");
             }
+            fprintf(output_file, "    movq rax, xmm0\n");
+            fprintf(output_file, "    push rax\n");
+            state->stack_size += 8;
+            gen_expr(node->binary_expr.rhs, output_file, state);
+            if(!is_float(right_type)){
+                fprintf(output_file, "    cvtsi2sd xmm0, rax\n");
+            }
+            fprintf(output_file, "    movsd xmm1, [rsp]\n");
+            fprintf(output_file, "    add rsp, 8\n");
+            state->stack_size -= 8;
+            fprintf(output_file, "    ucomisd xmm1, xmm0\n");
 
             switch(node->binary_expr.op){
                 case OP_EQ: fprintf(output_file, "    sete al\n    setnp dl\n    and al, dl\n    movzx rax, al\n"); break;
@@ -957,6 +1094,51 @@ static void gen_expr(Node* node, FILE* output_file, CodegenState* state){
             fprintf(output_file, "    syscall\n");
             return;
         }
+        // Generic fd I/O: write(fd, data) / read(fd, buffer). Used by the
+        // buffered readers and writers (@std/io).
+        if(strcmp(node->funcall.name, "fdWrite_int64_array") == 0 && node->funcall.args->length == 2){
+            gen_expr(node->funcall.args->nodes[1], output_file, state);
+            fprintf(output_file, "    push rdx\n");
+            fprintf(output_file, "    mov rsi, rax\n");
+            gen_expr(node->funcall.args->nodes[0], output_file, state);
+            fprintf(output_file, "    mov rdi, rax\n");
+            fprintf(output_file, "    pop rdx\n");
+            fprintf(output_file, "    mov r10, 0\n");
+            fprintf(output_file, "    mov rax, 1\n");
+            fprintf(output_file, "    syscall\n");
+            return;
+        }
+        if(strcmp(node->funcall.name, "fdRead_int64_array") == 0 && node->funcall.args->length == 2){
+            gen_expr(node->funcall.args->nodes[1], output_file, state);
+            fprintf(output_file, "    push rdx\n");
+            fprintf(output_file, "    mov rsi, rax\n");
+            gen_expr(node->funcall.args->nodes[0], output_file, state);
+            fprintf(output_file, "    mov rdi, rax\n");
+            fprintf(output_file, "    pop rdx\n");
+            fprintf(output_file, "    mov r10, 0\n");
+            fprintf(output_file, "    mov rax, 0\n");
+            fprintf(output_file, "    syscall\n");
+            return;
+        }
+        // Generic Linux syscall: syscallRaw(n, a1..a6).
+        if(strcmp(node->funcall.name, "syscallRaw_int64_int64_int64_int64_int64_int64_int64") == 0 &&
+           node->funcall.args->length == 7){
+            for(int i = 6; i >= 0; i--){
+                gen_expr(node->funcall.args->nodes[i], output_file, state);
+                fprintf(output_file, "    push rax\n");
+                state->stack_size += 8;
+            }
+            fprintf(output_file, "    pop rax\n");   // syscall number
+            fprintf(output_file, "    pop rdi\n");
+            fprintf(output_file, "    pop rsi\n");
+            fprintf(output_file, "    pop rdx\n");
+            fprintf(output_file, "    pop r10\n");
+            fprintf(output_file, "    pop r8\n");
+            fprintf(output_file, "    pop r9\n");
+            fprintf(output_file, "    syscall\n");
+            state->stack_size -= 56;
+            return;
+        }
         if(strcmp(node->funcall.name, "socketClose_int64") == 0 && node->funcall.args->length == 1){
             gen_expr(node->funcall.args->nodes[0], output_file, state);
             fprintf(output_file, "    mov rdi, rax\n");
@@ -1126,6 +1308,50 @@ static void gen_expr(Node* node, FILE* output_file, CodegenState* state){
     if(node->type == ND_STRUCTCONS){
         StructDef* sdef = struct_table_lookup(node->structcons.name);
         Type* sty = struct_type(sdef);
+
+        if(node->structcons.mangled_name){
+            // Construct the value in place by calling its constructor with
+            // `this` pointing at the stack temporary.
+            int this_off = node->structcons.temp_offset;
+            int total_bytes = 8; // 'this'
+            if(node->structcons.args){
+                for(int i = (int)node->structcons.args->length - 1; i >= 0; i--){
+                    Node* arg = node->structcons.args->nodes[i];
+                    gen_expr(arg, output_file, state);
+                    if(node_is_float(arg)){
+                        fprintf(output_file, "    movq rax, xmm0\n");
+                    }
+                    if(arg->ty && arg->ty->kind == TY_STRUCT){
+                        int asize = arg->ty->size;
+                        fprintf(output_file, "    sub rsp, %d\n", asize);
+                        fprintf(output_file, "    mov rsi, rax\n");
+                        fprintf(output_file, "    mov rdi, rsp\n");
+                        for(int b = 0; b < asize; b += 8){
+                            fprintf(output_file, "    mov rcx, [rsi+%d]\n", b);
+                            fprintf(output_file, "    mov [rdi+%d], rcx\n", b);
+                        }
+                        total_bytes += asize;
+                        state->stack_size += asize;
+                    } else if(node_is_string_like(arg)){
+                        fprintf(output_file, "    push rdx\n");
+                        fprintf(output_file, "    push rax\n");
+                        total_bytes += 16;
+                        state->stack_size += 16;
+                    } else {
+                        fprintf(output_file, "    push rax\n");
+                        total_bytes += 8;
+                        state->stack_size += 8;
+                    }
+                }
+            }
+            fprintf(output_file, "    lea rax, [rbp%+d]\n", this_off);
+            fprintf(output_file, "    push rax\n");
+            fprintf(output_file, "    call %s\n", node->structcons.mangled_name);
+            fprintf(output_file, "    add rsp, %d\n", total_bytes);
+            state->stack_size -= total_bytes;
+            fprintf(output_file, "    lea rax, [rbp%+d]\n", this_off);
+            return;
+        }
 
         fprintf(output_file, "    lea rax, [rbp%+d]\n", node->structcons.temp_offset);
         fprintf(output_file, "    push r12\n");
@@ -1372,16 +1598,55 @@ static void gen_expr(Node* node, FILE* output_file, CodegenState* state){
 
 static void gen_stmt(Node* node, FILE* output_file, CodegenState* state);
 
-static void gen_block(NodeList* stmts, FILE* output_file, CodegenState* state){
-    for(uint64_t i = 0; i < stmts->length; i++){
-        gen_stmt(stmts->nodes[i], output_file, state);
+// Emits the pending deferred statements of every active block from `min_depth`
+// up to the innermost one, in LIFO order (innermost block first, reverse of
+// registration inside each block).
+static void gen_pending_defers(FILE* output_file, CodegenState* state, int min_depth){
+    for(int d = state->defer_depth - 1; d >= min_depth; d--){
+        NodeList* dl = state->defer_lists[d];
+        if(!dl) continue;
+        for(int i = (int)dl->length - 1; i >= 0; i--){
+            gen_stmt(dl->nodes[i], output_file, state);
+        }
     }
+}
+
+static NodeList* cg_new_defer_list(void){
+    NodeList* l = malloc(sizeof(NodeList));
+    l->size = 8;
+    l->length = 0;
+    l->nodes = malloc(8 * sizeof(Node*));
+    return l;
+}
+
+static void gen_block(NodeList* stmts, FILE* output_file, CodegenState* state){
+    NodeList* dl = cg_new_defer_list();
+    state->defer_lists[state->defer_depth++] = dl;
+
+    for(uint64_t i = 0; i < stmts->length; i++){
+        Node* s = stmts->nodes[i];
+        if(s->type == ND_DEFER){
+            nodelist_add(dl, s->defer_stmt.stmt);
+        } else {
+            gen_stmt(s, output_file, state);
+        }
+    }
+
+    // Normal block exit: run this block's defers in LIFO order.
+    for(int i = (int)dl->length - 1; i >= 0; i--){
+        gen_stmt(dl->nodes[i], output_file, state);
+    }
+
+    state->defer_depth--;
+    free(dl->nodes);
+    free(dl);
 }
 
 static void gen_switch(Node* node, FILE* output_file, CodegenState* state){
     uint64_t id = label_count++;
     uint64_t end_label = id;
 
+    state->loop_defer_depth[state->break_depth] = state->defer_depth;
     state->break_labels[state->break_depth++] = end_label;
 
     gen_expr(node->switch_stmt.scrutinee, output_file, state);
@@ -1549,8 +1814,16 @@ static void gen_stmt(Node* node, FILE* output_file, CodegenState* state){
         } else {
             fprintf(output_file, "    mov rdi, rax\n");
         }
+        // Run pending defers before terminating (e.g. flush buffers).
+        fprintf(output_file, "    push rdi\n");
+        gen_pending_defers(output_file, state, 0);
+        fprintf(output_file, "    pop rdi\n");
         fprintf(output_file, "    mov rax, 60\n");
         fprintf(output_file, "    syscall\n");
+        return;
+    }
+    if(node->type == ND_DEFER){
+        // Registered and emitted by gen_block at block exit.
         return;
     }
     if(node->type == ND_IF){
@@ -1560,6 +1833,7 @@ static void gen_stmt(Node* node, FILE* output_file, CodegenState* state){
     if(node->type == ND_WHILE){
         uint64_t id = label_count++;
         uint64_t cont_id = label_count++;
+        state->loop_defer_depth[state->break_depth] = state->defer_depth;
         state->break_labels[state->break_depth] = id;
         state->continue_labels[state->break_depth] = cont_id;
         state->break_depth++;
@@ -1577,6 +1851,7 @@ static void gen_stmt(Node* node, FILE* output_file, CodegenState* state){
     if(node->type == ND_DO_WHILE){
         uint64_t id = label_count++;
         uint64_t cont_id = label_count++;
+        state->loop_defer_depth[state->break_depth] = state->defer_depth;
         state->break_labels[state->break_depth] = id;
         state->continue_labels[state->break_depth] = cont_id;
         state->break_depth++;
@@ -1593,6 +1868,7 @@ static void gen_stmt(Node* node, FILE* output_file, CodegenState* state){
     if(node->type == ND_FOR){
         uint64_t id = label_count++;
         uint64_t cont_id = label_count++;
+        state->loop_defer_depth[state->break_depth] = state->defer_depth;
         state->break_labels[state->break_depth] = id;
         state->continue_labels[state->break_depth] = cont_id;
         state->break_depth++;
@@ -1628,6 +1904,16 @@ static void gen_stmt(Node* node, FILE* output_file, CodegenState* state){
                 fprintf(output_file, "    mov rdi, rax\n");
             }
         }
+        // Preserve the return value(s) while running pending defers.
+        fprintf(output_file, "    sub rsp, 32\n");
+        fprintf(output_file, "    movsd [rsp], xmm0\n");
+        fprintf(output_file, "    mov [rsp+8], rax\n");
+        fprintf(output_file, "    mov [rsp+16], rdi\n");
+        gen_pending_defers(output_file, state, 0);
+        fprintf(output_file, "    movsd xmm0, [rsp]\n");
+        fprintf(output_file, "    mov rax, [rsp+8]\n");
+        fprintf(output_file, "    mov rdi, [rsp+16]\n");
+        fprintf(output_file, "    add rsp, 32\n");
         fprintf(output_file, "    mov rsp, rbp\n");
         fprintf(output_file, "    pop rbp\n");
         if(state->is_main){
@@ -1732,13 +2018,13 @@ static void gen_stmt(Node* node, FILE* output_file, CodegenState* state){
             return;
         } else if(mobj->type == ND_VARREF){
             if(mobj->varref.is_global){
-                if(mobj->ty && (mobj->ty->kind == TY_PTR || mobj->ty->kind == TY_REF)){
+                if(mobj->ty && mobj->ty->kind == TY_PTR){
                     fprintf(output_file, "    mov rdi, [rip + %s]\n", mobj->varref.name);
                 } else {
                     fprintf(output_file, "    lea rdi, [rip + %s]\n", mobj->varref.name);
                 }
             } else if(node->member_assign.is_class ||
-                      (mobj->ty && (mobj->ty->kind == TY_PTR || mobj->ty->kind == TY_REF))){
+                      (mobj->ty && mobj->ty->kind == TY_PTR)){
                 fprintf(output_file, "    mov rdi, [rbp%+d]\n", mobj->varref.offset);
             } else {
                 fprintf(output_file, "    lea rdi, [rbp%+d]\n", mobj->varref.offset);
@@ -1761,20 +2047,34 @@ static void gen_stmt(Node* node, FILE* output_file, CodegenState* state){
             }
         }
 
-        if(val_is_struct){
+        Type* ft = node->member_assign.field_type;
+        if(val_is_struct || (ft && ft->kind == TY_STRUCT)){
+            int size = ft ? ft->size : vsize;
             fprintf(output_file, "    mov rsi, rax\n");
             fprintf(output_file, "    lea rdi, [rdi+%d]\n", field_off);
-            for(int b = 0; b < vsize; b += 8){
+            for(int b = 0; b < size; b += 8){
                 fprintf(output_file, "    mov rcx, [rsi+%d]\n", b);
                 fprintf(output_file, "    mov [rdi+%d], rcx\n", b);
             }
-        } else if(val_is_float){
-            fprintf(output_file, "    movsd [rdi+%d], xmm0\n", field_off);
-        } else if(node_is_string_like(node->member_assign.value)){
+        } else if(val_is_float || (ft && is_float(ft))){
+            if(ft && ft->kind == TY_FLOAT32){
+                fprintf(output_file, "    cvtsd2ss xmm0, xmm0\n");
+                fprintf(output_file, "    movss [rdi+%d], xmm0\n", field_off);
+            } else {
+                fprintf(output_file, "    movsd [rdi+%d], xmm0\n", field_off);
+            }
+        } else if(ft && (ft->kind == TY_STRING || ft->kind == TY_ARRAY)){
             fprintf(output_file, "    mov [rdi+%d], rax\n", field_off);
             fprintf(output_file, "    mov [rdi+%d], rdx\n", field_off + 8);
-        } else if(node->member_assign.value->ty && (node->member_assign.value->ty->kind == TY_BOOL ||
-                                                    node->member_assign.value->ty->kind == TY_CHAR)){
+        } else if(ft && ft->size == 1){
+            fprintf(output_file, "    mov byte ptr [rdi+%d], al\n", field_off);
+        } else if(ft && ft->size == 2){
+            fprintf(output_file, "    mov word ptr [rdi+%d], ax\n", field_off);
+        } else if(ft && ft->size == 4){
+            fprintf(output_file, "    mov dword ptr [rdi+%d], eax\n", field_off);
+        } else if(!ft && node->member_assign.value->ty &&
+                  (node->member_assign.value->ty->kind == TY_BOOL ||
+                   node->member_assign.value->ty->kind == TY_CHAR)){
             fprintf(output_file, "    mov byte ptr [rdi+%d], al\n", field_off);
         } else {
             fprintf(output_file, "    mov [rdi+%d], rax\n", field_off);
@@ -1790,6 +2090,7 @@ static void gen_stmt(Node* node, FILE* output_file, CodegenState* state){
             fprintf(stderr, "codegen error: break outside of switch/loop\n");
             exit(1);
         }
+        gen_pending_defers(output_file, state, state->loop_defer_depth[state->break_depth - 1]);
         fprintf(output_file, "    jmp .Lbreak_%lu\n", state->break_labels[state->break_depth - 1]);
         return;
     }
@@ -1798,6 +2099,7 @@ static void gen_stmt(Node* node, FILE* output_file, CodegenState* state){
             fprintf(stderr, "codegen error: continue outside of loop\n");
             exit(1);
         }
+        gen_pending_defers(output_file, state, state->loop_defer_depth[state->break_depth - 1]);
         fprintf(output_file, "    jmp .Lcont_%lu\n", state->continue_labels[state->break_depth - 1]);
         return;
     }
@@ -1820,23 +2122,29 @@ static void gen_stmt(Node* node, FILE* output_file, CodegenState* state){
         return;
     }
     if(node->type == ND_DEREF_ASSIGN){
+        Type* st = node->deref_assign.target_type ? node->deref_assign.target_type
+                                                  : node->deref_assign.value->ty;
         gen_expr(node->deref_assign.target, output_file, state);
         fprintf(output_file, "    push rax\n");
         gen_expr(node->deref_assign.value, output_file, state);
         fprintf(output_file, "    pop rcx\n");
-        if(node->deref_assign.value->ty &&
-           (node->deref_assign.value->ty->kind == TY_CHAR || node->deref_assign.value->ty->kind == TY_UINT8)){
+        if(st && (st->kind == TY_CHAR || st->kind == TY_UINT8 || st->kind == TY_INT8 ||
+                  st->kind == TY_BOOL)){
             fprintf(output_file, "    mov byte ptr [rcx], al\n");
-        } else if(node->deref_assign.value->ty && is_string_type(node->deref_assign.value->ty)){
+        } else if(st && is_string_type(st)){
             fprintf(output_file, "    mov [rcx], rax\n");
             fprintf(output_file, "    mov [rcx+8], rdx\n");
-        } else if(node->deref_assign.value->ty && node->deref_assign.value->ty->kind == TY_STRUCT){
+        } else if(st && st->kind == TY_STRUCT){
             fprintf(output_file, "    mov rsi, rax\n");
             fprintf(output_file, "    mov rdi, rcx\n");
-            for(int b = 0; b < node->deref_assign.value->ty->size; b += 8){
+            for(int b = 0; b < st->size; b += 8){
                 fprintf(output_file, "    mov rcx, [rsi+%d]\n", b);
                 fprintf(output_file, "    mov [rdi+%d], rcx\n", b);
             }
+        } else if(st && st->size == 2){
+            fprintf(output_file, "    mov word ptr [rcx], ax\n");
+        } else if(st && st->size == 4){
+            fprintf(output_file, "    mov dword ptr [rcx], eax\n");
         } else {
             fprintf(output_file, "    mov [rcx], rax\n");
         }
@@ -1864,6 +2172,22 @@ static void gen_funcdef(Node* node, FILE* output_file){
 
     fprintf(output_file, "    push rbp\n");
     fprintf(output_file, "    mov rbp, rsp\n");
+
+    // Publish argc/argv/envp for @std/process (only when it is imported).
+    if(is_main && g_emit_process_globals){
+        fprintf(output_file, "    mov rax, [rbp+8]\n");
+        fprintf(output_file, "    mov [rip + qz_argc], rax\n");
+        // argv is the address of argv[0], which lives at [rbp+16].
+        fprintf(output_file, "    lea rax, [rbp+16]\n");
+        fprintf(output_file, "    mov [rip + qz_argv], rax\n");
+        // envp = argv + (argc + 1) * 8
+        fprintf(output_file, "    mov rcx, [rbp+8]\n");
+        fprintf(output_file, "    inc rcx\n");
+        fprintf(output_file, "    shl rcx, 3\n");
+        fprintf(output_file, "    lea rdx, [rbp+16]\n");
+        fprintf(output_file, "    add rcx, rdx\n");
+        fprintf(output_file, "    mov [rip + qz_envp], rcx\n");
+    }
 
     if(main_has_args){
         uint64_t id = label_count++;
@@ -1951,6 +2275,17 @@ static void gen_funcdef(Node* node, FILE* output_file){
 
 void codegen(const Node* ast, FILE* output_file){
     fprintf(output_file, ".intel_syntax noprefix\n");
+
+    // Detect whether @std/process is in use (its globals are declared there).
+    g_emit_process_globals = false;
+    for(uint64_t i = 0; i < ast->program_node.children->length; i++){
+        Node* c = ast->program_node.children->nodes[i];
+        if(c->type == ND_VARDECL && c->vardecl.is_global && c->vardecl.name &&
+           strcmp(c->vardecl.name, "qz_argc") == 0){
+            g_emit_process_globals = true;
+            break;
+        }
+    }
 
     bool has_data = false;
     bool has_bss = false;

@@ -1,0 +1,121 @@
+/*
+    @std/text/builder.qz
+    StringBuilder: an efficient, growable buffer for building text.
+
+    Appending to a StringBuilder amortizes to O(1) per byte and avoids the
+    intermediate allocations of repeated `a + b` concatenation.
+
+        var b = new StringBuilder()
+        defer b.release()
+        b.append("x = ")
+        b.append(42)
+        b.append('\n')
+        println(b.toString())
+*/
+import "@std/string.qz"
+
+struct StringBuilder {
+    var data: ptr<char>
+    var capacity: uint64
+    var length: uint64
+
+    function StringBuilder() {
+        this.capacity = 32
+        this.length = 0
+        this.data = new char[this.capacity]
+    }
+
+    function StringBuilder(initialCapacity: uint64) {
+        var cap = initialCapacity < 1 ? 1 : initialCapacity
+        this.capacity = cap
+        this.length = 0
+        this.data = new char[cap]
+    }
+
+    /*
+        Number of characters currently stored.
+    */
+    function size() : uint64 => this.length
+
+    function ensure(extra: uint64) {
+        if(this.length + extra <= this.capacity) return
+        var newCapacity = this.capacity * 2
+        while(newCapacity < this.length + extra) {
+            newCapacity = newCapacity * 2
+        }
+        var newData = new char[newCapacity]
+        var i: uint64 = 0
+        while(i < this.length) {
+            newData[i] = this.data[i]
+            i += 1
+        }
+        free this.data
+        this.data = newData
+        this.capacity = newCapacity
+    }
+
+    function append(c: char) {
+        this.ensure(1)
+        this.data[this.length] = c
+        this.length = this.length + 1
+    }
+
+    function append(text: string) {
+        this.ensure(text.length)
+        var i: uint64 = 0
+        while(i < text.length) {
+            this.data[this.length + i] = text[i]
+            i += 1
+        }
+        this.length = this.length + text.length
+    }
+
+    function append(value: int64) {
+        this.append(toString(value))
+    }
+
+    function append(value: uint64) {
+        this.append(toString(value))
+    }
+
+    function append(value: bool) {
+        this.append(value ? "true" : "false")
+    }
+
+    /*
+        A zero-copy view of the current contents. Invalidated by later appends
+        or by `release`.
+    */
+    function toString() : string {
+        var result: string
+        result.ptr = this.data
+        result.length = this.length
+        return result
+    }
+
+    /*
+        A deep copy of the current contents. The caller owns the buffer.
+    */
+    function build() : string {
+        var result: string
+        result.length = this.length
+        result.ptr = new char[this.length]
+        var i: uint64 = 0
+        while(i < this.length) {
+            result.ptr[i] = this.data[i]
+            i += 1
+        }
+        return result
+    }
+
+    function clear() {
+        this.length = 0
+    }
+
+    function release() {
+        free this.data
+        this.data = null
+        this.capacity = 0
+        this.length = 0
+    }
+}

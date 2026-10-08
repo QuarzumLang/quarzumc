@@ -1,0 +1,45 @@
+import "@std/collections/list.qz"
+import "@std/core/option.qz"
+
+function main() {
+    var xs = new List<int64>()
+    defer xs.release()
+
+    xs.add(10)
+    xs.add(20)
+    xs.add(30)
+    if(xs.size() != 3) return 1
+    if(xs.getUnchecked(1) != 20) return 1
+
+    xs.insert(1, 15)          // 10, 15, 20, 30
+    if(xs.size() != 4) return 1
+    if(xs.getUnchecked(2) != 20) return 1
+
+    if(not xs.contains(15)) return 1
+    if(xs.contains(99)) return 1
+
+    if(not xs.remove(15)) return 1
+    if(xs.contains(15)) return 1
+    if(xs.size() != 3) return 1
+
+    var popped = xs.pop()     // 30
+    if(not isSome(popped)) return 1
+    if(unwrap(popped) != 30) return 1
+    if(xs.size() != 2) return 1
+
+    xs.set(0, 100)
+    if(xs.getUnchecked(0) != 100) return 1
+
+    var slice = xs.asSlice()
+    if(slice.length != 2) return 1
+    if(slice[0] != 100) return 1
+
+    var copy = xs.cloneData()
+    if(copy[0] != 100) return 1
+    free copy.ptr
+
+    xs.clear()
+    if(not xs.isEmpty()) return 1
+
+    return 0
+}

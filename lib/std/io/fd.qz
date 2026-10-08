@@ -1,0 +1,23 @@
+/*
+    @std/io/fd.qz
+    Raw file-descriptor I/O (Linux read/write syscalls).
+
+    Prefer the buffered `BufReader`/`BufWriter` over these.
+*/
+
+/*
+    Writes `data` to the file descriptor `fd`.
+
+    Returns:
+        - The number of bytes written, or a negative value on error.
+*/
+function fdWrite(fd: int64, data: char[]): int64
+
+/*
+    Reads up to `buffer.length` bytes from `fd` into `buffer`.
+
+    Returns:
+        - The number of bytes read (0 means end of file), or a negative value
+          on error.
+*/
+function fdRead(fd: int64, buffer: char[]): int64

@@ -54,11 +54,11 @@ function daysToDate(days: int64): Date {
         - seconds: Whole seconds since 1970-01-01 00:00:00 UTC
         - nanos: The remainder in nanoseconds, from 0 to 999999999
 */
-class DateTime {
+struct DateTime {
     var seconds: int64
     var nanos: int64
 
-    function new(seconds: int64, nanos: int64){
+    function DateTime(seconds: int64, nanos: int64){
         this.seconds = seconds
         this.nanos = nanos
     }
@@ -137,7 +137,7 @@ class DateTime {
             - other: The instant to subtract
     */
     function sub(other: DateTime): Duration {
-        return new Duration((this.seconds - other.seconds) * 1000000000 + (this.nanos - other.nanos))
+        return Duration((this.seconds - other.seconds) * 1000000000 + (this.nanos - other.nanos))
     }
 
     /*
@@ -164,8 +164,8 @@ class DateTime {
 function now(): DateTime {
     var tp: char[]
     tp.length = 16
-    tp.ptr = alloc char[16]
+    tp.ptr = new char[16]
     clockGetTime(CLOCK_REALTIME, tp)
     var base = tp.ptr as int64
-    return new DateTime(*((base + 0) as ptr<int64>), *((base + 8) as ptr<int64>))
+    return DateTime(*((base + 0) as ptr<int64>), *((base + 8) as ptr<int64>))
 }

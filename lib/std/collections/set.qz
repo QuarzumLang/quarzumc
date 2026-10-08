@@ -1,79 +1,77 @@
 /*
-    @std/collections/set.qz - 02/08/2026
-    Set definition for the Quarzum Standard Library
+    @std/collections/set.qz
+    Set<T>: a hash set with open addressing (linear probing).
+
+    Elements are hashed with `hashValue` and compared with `equals`
+    (`@std/core/compare.qz`).
 */
-import "@std/collections/traits/collection.qz"
+import "@std/core/option.qz"
+import "@std/core/compare.qz"
 
-/*
-    Defines a generic Set, a dynamic size collection of data.
-
-    Stores elements by value, does not allow duplicated values.
-*/  
-class Set<T> implements Collection<T> {
-
-    // Raw data pointer
+struct Set<T> {
     var data: ptr<T>
+    // 0 = empty, 1 = occupied.
     var occupied: ptr<uint8>
-    // The maximum capacity of the Set without resizing it
     var capacity: uint64
-    // The count of elements inside the Set. Always lower or equal than the capacity.
     var size: uint64
 
-    function new(){
+    function Set() {
         this.capacity = 16
         this.size = 0
-        this.data = alloc T[this.capacity]
-        this.occupied = alloc uint8[this.capacity]
+        this.data = new T[this.capacity]
+        this.occupied = new uint8[this.capacity]
         this.clearSlots()
     }
 
-    function occAddr(idx: uint64) : int64 {
-        return this.occupied as int64 + idx
+    function Set(initialCapacity: uint64) {
+        var cap = initialCapacity < 4 ? 4 : initialCapacity
+        this.capacity = cap
+        this.size = 0
+        this.data = new T[cap]
+        this.occupied = new uint8[cap]
+        this.clearSlots()
     }
 
-    function isOcc(idx: uint64) : bool {
-        return *((this.occAddr(idx)) as ptr<uint8>) != 0
-    }
+    function isOcc(idx: uint64) : bool => this.occupied[idx] != 0
 
-    function setOcc(idx: uint64, val: uint8){
-        *((this.occAddr(idx)) as ptr<uint8>) = val
-    }
-
-    function clearSlots(){
-        for(var i: uint64 = 0; i < this.capacity; i = i + 1){
-            this.setOcc(i, 0)
+    function clearSlots() {
+        var i: uint64 = 0
+        while(i < this.capacity) {
+            this.occupied[i] = 0
+            i += 1
         }
     }
 
-    function elemAddr(idx: uint64) : int64 {
-        return this.data as int64 + idx * sizeof(T)
-    }
+    function slotOf(value: T) : uint64 => hashValue(value) % this.capacity
 
-    function hash(key: T) : uint64 {
-        return (key as uint64) % this.capacity
-    }
-
-    function add(element: T){
-        if(this.size * 3 >= this.capacity * 2){
+    function add(element: T) {
+        if(this.size * 3 >= this.capacity * 2) {
             this.resize(this.capacity * 2)
         }
-        var idx = this.hash(element)
-        while(this.isOcc(idx)){
-            if(*((this.elemAddr(idx)) as ptr<T>) == element){
-                return
-            }
+        var idx = this.slotOf(element)
+        while(this.isOcc(idx)) {
+            if(equals(this.data[idx], element)) return
             idx = (idx + 1) % this.capacity
         }
-        *((this.elemAddr(idx)) as ptr<T>) = element
-        this.setOcc(idx, 1)
+        this.data[idx] = element
+        this.occupied[idx] = 1
         this.size = this.size + 1
     }
 
+    function contains(element: T) : bool {
+        var idx = this.slotOf(element)
+        while(this.isOcc(idx)) {
+            if(equals(this.data[idx], element)) return true
+            idx = (idx + 1) % this.capacity
+        }
+        return false
+    }
+
     function remove(element: T) : bool {
-        var idx = this.hash(element)
-        while(this.isOcc(idx)){
-            if(*((this.elemAddr(idx)) as ptr<T>) == element){
-                this.setOcc(idx, 0)
+        var idx = this.slotOf(element)
+        while(this.isOcc(idx)) {
+            if(equals(this.data[idx], element)) {
+                this.occupied[idx] = 0
                 this.size = this.size - 1
                 this.rehashAfterRemove(idx)
                 return true
@@ -83,103 +81,116 @@ class Set<T> implements Collection<T> {
         return false
     }
 
-    function rehashAfterRemove(removedIdx: uint64){
+    function rehashAfterRemove(removedIdx: uint64) {
         var idx = (removedIdx + 1) % this.capacity
-        while(this.isOcc(idx)){
-            var elem = *((this.elemAddr(idx)) as ptr<T>)
-            this.setOcc(idx, 0)
+        while(this.isOcc(idx)) {
+            var value = this.data[idx]
+            this.occupied[idx] = 0
             this.size = this.size - 1
-            var newIdx = this.hash(elem)
-            while(this.isOcc(newIdx)){
+            var newIdx = this.slotOf(value)
+            while(this.isOcc(newIdx)) {
                 newIdx = (newIdx + 1) % this.capacity
             }
-            *((this.elemAddr(newIdx)) as ptr<T>) = elem
-            this.setOcc(newIdx, 1)
+            this.data[newIdx] = value
+            this.occupied[newIdx] = 1
             this.size = this.size + 1
             idx = (idx + 1) % this.capacity
         }
     }
 
-    function contains(element: T) : bool {
-        var idx = this.hash(element)
-        while(this.isOcc(idx)){
-            if(*((this.elemAddr(idx)) as ptr<T>) == element){
-                return true
+    function forEach(f: (T) => void) {
+        var i: uint64 = 0
+        while(i < this.capacity) {
+            if(this.isOcc(i)) {
+                f(this.data[i])
             }
-            idx = (idx + 1) % this.capacity
+            i += 1
         }
-        return false
     }
 
-    function size() : uint64 {
-        return this.size
-    }
+    function size() : uint64 => this.size
 
-    function isEmpty() : bool {
-        return this.size == 0
-    }
+    function isEmpty() : bool => this.size == 0
 
-    function clear(){
+    function clear() {
         this.clearSlots()
         this.size = 0
     }
 
-    function getUnion(other: Set<T>) : Set<T> {
-        var result = new Set<T>()
-        for(var i: uint64 = 0; i < this.capacity; i = i + 1){
-            if(this.isOcc(i)){
-                result.add(*((this.elemAddr(i)) as ptr<T>))
-            }
-        }
-        for(var j: uint64 = 0; j < other.capacity; j = j + 1){
-            if(other.isOcc(j)){
-                result.add(*((other.elemAddr(j)) as ptr<T>))
-            }
-        }
-        return result
-    }
-
-    function intersection(other: Set<T>) : Set<T> {
-        var result = new Set<T>()
-        for(var i: uint64 = 0; i < this.capacity; i = i + 1){
-            if(this.isOcc(i)){
-                var elem = *((this.elemAddr(i)) as ptr<T>)
-                if(other.contains(elem)){
-                    result.add(elem)
-                }
-            }
-        }
-        return result
-    }
-
-    function difference(other: Set<T>) : Set<T> {
-        var result = new Set<T>()
-        for(var i: uint64 = 0; i < this.capacity; i = i + 1){
-            if(this.isOcc(i)){
-                var elem = *((this.elemAddr(i)) as ptr<T>)
-                if(other.contains(elem) == false){
-                    result.add(elem)
-                }
-            }
-        }
-        return result
-    }
-
-    function resize(newCapacity: uint64){
+    function resize(newCapacity: uint64) {
         var oldData = this.data
         var oldOccupied = this.occupied
         var oldCapacity: uint64 = this.capacity
-        this.data = alloc T[newCapacity]
-        this.occupied = alloc uint8[newCapacity]
+        this.data = new T[newCapacity]
+        this.occupied = new uint8[newCapacity]
         this.capacity = newCapacity
         this.size = 0
         this.clearSlots()
-        for(var i: uint64 = 0; i < oldCapacity; i = i + 1){
-            if(*((oldOccupied as int64 + i) as ptr<uint8>) != 0){
-                this.add(*((oldData as int64 + i * sizeof(T)) as ptr<T>))
+        var i: uint64 = 0
+        while(i < oldCapacity) {
+            if(oldOccupied[i] != 0) {
+                this.add(oldData[i])
             }
+            i += 1
         }
         free oldData
         free oldOccupied
+    }
+
+    /*
+        Union with `other` into a new set.
+    */
+    function getUnion(other: ptr<Set<T>>) : ptr<Set<T>> {
+        var result = new Set<T>(this.capacity + other.capacity)
+        var i: uint64 = 0
+        while(i < this.capacity) {
+            if(this.isOcc(i)) result.add(this.data[i])
+            i += 1
+        }
+        i = 0
+        while(i < other.capacity) {
+            if(other.isOcc(i)) result.add(other.data[i])
+            i += 1
+        }
+        return result
+    }
+
+    /*
+        Intersection with `other` into a new set.
+    */
+    function intersection(other: ptr<Set<T>>) : ptr<Set<T>> {
+        var result = new Set<T>(this.size + 1)
+        var i: uint64 = 0
+        while(i < this.capacity) {
+            if(this.isOcc(i) and other.contains(this.data[i])) {
+                result.add(this.data[i])
+            }
+            i += 1
+        }
+        return result
+    }
+
+    /*
+        Elements of this set that are not in `other`, into a new set.
+    */
+    function difference(other: ptr<Set<T>>) : ptr<Set<T>> {
+        var result = new Set<T>(this.size + 1)
+        var i: uint64 = 0
+        while(i < this.capacity) {
+            if(this.isOcc(i) and not other.contains(this.data[i])) {
+                result.add(this.data[i])
+            }
+            i += 1
+        }
+        return result
+    }
+
+    function release() {
+        free this.data
+        free this.occupied
+        this.data = null
+        this.occupied = null
+        this.capacity = 0
+        this.size = 0
     }
 }

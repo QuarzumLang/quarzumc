@@ -1,0 +1,96 @@
+/*
+    @std/io/bufreader.qz
+    BufReader: reads from a file descriptor in blocks.
+
+        var f = fopen("in.txt", "r")
+        var r = new BufReader(f.fd, 4096)
+        defer r.release()
+        var line = r.readLine()
+*/
+import "@std/io/fd.qz"
+import "@std/core/option.qz"
+import "@std/text/builder.qz"
+
+struct BufReader {
+    var fd: int64
+    var buffer: ptr<char>
+    var capacity: uint64
+    var start: uint64
+    var end: uint64
+
+    function BufReader(fd: int64, capacity: uint64) {
+        var cap = capacity < 1 ? 1 : capacity
+        this.fd = fd
+        this.capacity = cap
+        this.start = 0
+        this.end = 0
+        this.buffer = new char[cap]
+    }
+
+    function fill() : bool {
+        this.start = 0
+        this.end = 0
+        var block: char[]
+        block.ptr = this.buffer
+        block.length = this.capacity
+        var n = fdRead(this.fd, block)
+        if(n <= 0) return false
+        this.end = n as uint64
+        return true
+    }
+
+    /*
+        Reads a single byte, or None at end of file.
+    */
+    function readByte() : Option<char> {
+        if(this.start >= this.end) {
+            if(not this.fill()) return Option.None
+        }
+        var c = this.buffer[this.start]
+        this.start = this.start + 1
+        return Option.Some(c)
+    }
+
+    /*
+        Reads until the next newline (not included) or end of file. Returns None
+        only when nothing was read.
+    */
+    function readLine() : Option<string> {
+        var builder = new StringBuilder()
+        defer builder.release()
+        var any = false
+        var c = this.readByte()
+        while(isSome(c)) {
+            var ch = unwrap(c)
+            if(ch == '\n') return Option.Some(builder.build())
+            any = true
+            builder.append(ch)
+            c = this.readByte()
+        }
+        if(any) return Option.Some(builder.build())
+        return Option.None
+    }
+
+    /*
+        Reads the rest of the input into a single string. The caller owns the
+        returned buffer.
+    */
+    function readAll() : string {
+        var builder = new StringBuilder()
+        defer builder.release()
+        var c = this.readByte()
+        while(isSome(c)) {
+            builder.append(unwrap(c))
+            c = this.readByte()
+        }
+        return builder.build()
+    }
+
+    function release() {
+        free this.buffer
+        this.buffer = null
+        this.capacity = 0
+        this.start = 0
+        this.end = 0
+    }
+}

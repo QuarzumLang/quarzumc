@@ -1,0 +1,48 @@
+import "@std/text/format.qz"
+import "@std/string.qz"
+
+function main() {
+    var args: string[]
+    args.length = 2
+    args.ptr = new string[2]
+    args[0] = "world"
+    args[1] = toString(42 as int64)
+
+    var msg = format("hello {}, n={}", args)
+    if(msg != "hello world, n=42") return 1
+    free msg.ptr
+    free args.ptr
+
+    var parts: string[]
+    parts.length = 3
+    parts.ptr = new string[3]
+    parts[0] = "a"
+    parts[1] = "b"
+    parts[2] = "c"
+    var joined = join(parts, "-")
+    if(joined != "a-b-c") return 1
+    free joined.ptr
+    free parts.ptr
+
+    var rep = repeat("ab", 3)
+    if(rep != "ababab") return 1
+    free rep.ptr
+
+    var left = padLeft("7", 3, '0')
+    if(left != "007") return 1
+    free left.ptr
+
+    var right = padRight("7", 3, '.')
+    if(right != "7..") return 1
+    free right.ptr
+
+    var fs = toString(3.5 as float64)
+    if(fs != "3.5") return 1
+    free fs.ptr
+
+    var fneg = toString(-2.25 as float64)
+    if(fneg != "-2.25") return 1
+    free fneg.ptr
+
+    return 0
+}

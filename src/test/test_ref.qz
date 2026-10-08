@@ -1,7 +1,7 @@
-class Counter {
+struct Counter {
     var value: int
 
-    function new() {
+    function Counter() {
         this.value = 0
     }
 
@@ -14,16 +14,16 @@ class Counter {
     }
 }
 
-function takeRef(c: Counter) : int {
+function takeRef(c: ptr<Counter>) : int {
     return c.getValue()
 }
 
-function makeCounter() : Counter {
+function makeCounter() : ptr<Counter> {
     return new Counter()
 }
 
 function main() {
-    var c: Counter = makeCounter()
+    var c = makeCounter()
     c.increment()
     c.increment()
     var v = takeRef(c)

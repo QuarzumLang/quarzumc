@@ -1,8 +1,8 @@
-class Point {
+struct Point {
     var x: float64
     var y: float64
 
-    function new(x: float64, y: float64) {
+    function Point(x: float64, y: float64) {
         this.x = x
         this.y = y
     }

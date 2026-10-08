@@ -100,12 +100,13 @@ static bool is_keyword(char* lexeme) {
             "int8", "int16", "int32", "int64", "int",
             "uint8", "uint16", "uint32", "uint64", "uint",
             "float32", "float64", "float",
-            "enum", "struct",
+            "enum", "struct", "tuple",
             "if", "else", "for", "in", "while", "do",
             "switch", "match", "import", "case", "default", "break", "continue",
+            "defer",
             "true", "false", "or", "and", "xor", "not", "sizeof", "as",
-            "alloc", "free", "pass",
-            "class", "trait", "implements", "this", "new", "null",
+            "free", "pass",
+            "trait", "implements", "this", "new", "null",
             "public", "private", "protected"
         };
 
@@ -206,7 +207,11 @@ static bool semi_prev_qualifies(Token t){
         // still parse correctly.
         if(strcmp(t.value, ")") == 0 ||
            strcmp(t.value, "]") == 0 ||
-           strcmp(t.value, "}") == 0)
+           strcmp(t.value, "}") == 0 ||
+           // A generic/pointer type closes with '>', e.g. `as ptr<T>` or a
+           // `Map<K, V>` type; a following newline ends the statement. A
+           // newline *before* '>' is still suppressed by semi_omit_before.
+           strcmp(t.value, ">") == 0)
             return true;
     }
     if(t.kind == TT_KEYWORD){

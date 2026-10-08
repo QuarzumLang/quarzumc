@@ -1,8 +1,9 @@
-import "@std/types/optional.qz"
+import "@std/core/option.qz"
+import "@std/core/compare.qz"
 import "@std/collections/traits/collection.qz"
 import "@std/collections/traits/iterable.qz"
 
-class LinkedList<T> implements Collection<T>, Iterable<T> {
+struct LinkedList<T> implements Collection<T>, Iterable<T> {
     var data: ptr<T>
     var next: ptr<int64>
     var prev: ptr<int64>
@@ -13,16 +14,16 @@ class LinkedList<T> implements Collection<T>, Iterable<T> {
     var freeHead: int64
     var nextFreeIndex: int64
 
-    function new(){
+    function LinkedList(){
         this.capacity = 16
         this.head = -1
         this.tail = -1
         this.size = 0
         this.freeHead = -1
         this.nextFreeIndex = 0
-        this.data = alloc T[this.capacity]
-        this.next = alloc int64[this.capacity]
-        this.prev = alloc int64[this.capacity]
+        this.data = new T[this.capacity]
+        this.next = new int64[this.capacity]
+        this.prev = new int64[this.capacity]
     }
 
     function dataPtr(idx: int64) : int64 {
@@ -117,9 +118,9 @@ class LinkedList<T> implements Collection<T>, Iterable<T> {
         this.addLast(element)
     }
 
-    function removeFirst() : Optional<T> {
+    function removeFirst() : Option<T> {
         if(this.head == -1){
-            return Optional.None
+            return Option.None
         }
         var idx = this.head
         var val = this.getData(idx)
@@ -131,12 +132,12 @@ class LinkedList<T> implements Collection<T>, Iterable<T> {
         }
         this.freeNode(idx)
         this.size = this.size - 1
-        return Optional.Some(val)
+        return Option.Some(val)
     }
 
-    function removeLast() : Optional<T> {
+    function removeLast() : Option<T> {
         if(this.tail == -1){
-            return Optional.None
+            return Option.None
         }
         var idx = this.tail
         var val = this.getData(idx)
@@ -148,13 +149,13 @@ class LinkedList<T> implements Collection<T>, Iterable<T> {
         }
         this.freeNode(idx)
         this.size = this.size - 1
-        return Optional.Some(val)
+        return Option.Some(val)
     }
 
     function remove(element: T) : bool {
         var idx = this.head
         while(idx != -1){
-            if(this.getData(idx) == element){
+            if(equals(this.getData(idx), element)){
                 var p = this.getPrev(idx)
                 var n = this.getNext(idx)
                 if(p != -1){
@@ -179,7 +180,7 @@ class LinkedList<T> implements Collection<T>, Iterable<T> {
     function contains(element: T) : bool {
         var idx = this.head
         while(idx != -1){
-            if(this.getData(idx) == element){
+            if(equals(this.getData(idx), element)){
                 return true
             }
             idx = this.getNext(idx)
@@ -187,18 +188,26 @@ class LinkedList<T> implements Collection<T>, Iterable<T> {
         return false
     }
 
-    function getFirst() : Optional<T> {
-        if(this.head == -1){
-            return Optional.None
+    function forEach(f: (T) => void) {
+        var idx = this.head
+        while(idx != -1) {
+            f(this.getData(idx))
+            idx = this.getNext(idx)
         }
-        return Optional.Some(this.getData(this.head))
     }
 
-    function getLast() : Optional<T> {
-        if(this.tail == -1){
-            return Optional.None
+    function getFirst() : Option<T> {
+        if(this.head == -1){
+            return Option.None
         }
-        return Optional.Some(this.getData(this.tail))
+        return Option.Some(this.getData(this.head))
+    }
+
+    function getLast() : Option<T> {
+        if(this.tail == -1){
+            return Option.None
+        }
+        return Option.Some(this.getData(this.tail))
     }
 
     function size() : uint64 {
@@ -217,18 +226,18 @@ class LinkedList<T> implements Collection<T>, Iterable<T> {
         this.size = 0
     }
 
-    function first() : Optional<T> {
+    function first() : Option<T> {
         return this.getFirst()
     }
 
-    function last() : Optional<T> {
+    function last() : Option<T> {
         return this.getLast()
     }
 
     function resize(newCapacity: uint64){
-        var newData = alloc T[newCapacity]
-        var newNext = alloc int64[newCapacity]
-        var newPrev = alloc int64[newCapacity]
+        var newData = new T[newCapacity]
+        var newNext = new int64[newCapacity]
+        var newPrev = new int64[newCapacity]
         var oldCap: uint64 = this.capacity
         for(var i: uint64 = 0; i < oldCap; i = i + 1){
             var srcDOff = this.data as int64 + i * sizeof(T)
@@ -250,5 +259,18 @@ class LinkedList<T> implements Collection<T>, Iterable<T> {
         this.next = newNext
         this.prev = newPrev
         this.capacity = newCapacity
+    }
+
+    function release() {
+        free this.data
+        free this.next
+        free this.prev
+        this.data = null
+        this.next = null
+        this.prev = null
+        this.capacity = 0
+        this.size = 0
+        this.head = -1
+        this.tail = -1
     }
 }

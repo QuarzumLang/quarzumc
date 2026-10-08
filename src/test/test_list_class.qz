@@ -1,10 +1,7 @@
-import "@std/string.qz"
-import "@std/io.qz"
-
-class Node {
+struct Node {
     var value: int64
 
-    function new(v: int64){
+    function Node(v: int64){
         this.value = v
     }
 
@@ -13,15 +10,15 @@ class Node {
     }
 }
 
-class ClassList<T> {
+struct ClassList<T> {
     var data: ptr<T>
     var capacity: uint64
     var size: uint64
 
-    function new(){
+    function ClassList(){
         this.capacity = 16
         this.size = 0
-        this.data = alloc T[this.capacity]
+        this.data = new T[this.capacity]
     }
 
     function add(element: T){
@@ -34,45 +31,12 @@ class ClassList<T> {
     }
 
     function get(index: uint64) : T {
-        if(index < this.size){
-            var off = this.data as int64 + index * sizeof(T)
-            return *(off as ptr<T>)
-        }
-        return 0
-    }
-
-    function contains(element: T) : bool {
-        for(var i: uint64 = 0; i < this.size; i = i + 1){
-            var off = this.data as int64 + i * sizeof(T)
-            if(*(off as ptr<T>) == element){
-                return true
-            }
-        }
-        return false
-    }
-
-    function remove(element: T) : bool {
-        for(var i: uint64 = 0; i < this.size; i = i + 1){
-            var off = this.data as int64 + i * sizeof(T)
-            if(*(off as ptr<T>) == element){
-                this.removeAt(i)
-                return true
-            }
-        }
-        return false
-    }
-
-    function removeAt(index: uint64){
-        for(var i: uint64 = index; i < this.size - 1; i = i + 1){
-            var dstOff = this.data as int64 + i * sizeof(T)
-            var srcOff = this.data as int64 + (i + 1) * sizeof(T)
-            *(dstOff as ptr<T>) = *(srcOff as ptr<T>)
-        }
-        this.size = this.size - 1
+        var off = this.data as int64 + index * sizeof(T)
+        return *(off as ptr<T>)
     }
 
     function resize(newCapacity: uint64){
-        var newData = alloc T[newCapacity]
+        var newData = new T[newCapacity]
         var copySize: uint64 = this.size < newCapacity ? this.size : newCapacity
         for(var i: uint64 = 0; i < copySize; i = i + 1){
             var srcOff = this.data as int64 + i * sizeof(T)
@@ -87,16 +51,12 @@ class ClassList<T> {
 
 function main(){
     var l = new ClassList<Node>()
-    var a = new Node(10)
-    var b = new Node(20)
-    l.add(a)
-    l.add(b)
-    if(l.contains(b)){
-        if(l.remove(a)){
-            if(l.contains(a) == false){
-                return 1
-            }
-        }
+    l.add(Node(10))
+    l.add(Node(20))
+    var a = l.get(0)
+    var b = l.get(1)
+    if(a.getValue() == 10 && b.getValue() == 20){
+        return 0
     }
-    return 0
+    return 1
 }

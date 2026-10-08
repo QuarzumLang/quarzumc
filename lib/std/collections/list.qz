@@ -1,270 +1,308 @@
 /*
-    @std/collections/list.qz - 02/08/2026
-    List definition for the Quarzum Standard Library
+    @std/collections/list.qz
+    List<T>: a contiguous, growable array (a dynamic array / vector).
+
+    Elements are stored inline, so a List<T> is cache-friendly and indexing is
+    O(1). Growth doubles the capacity. Use it as the default sequence type.
+
+        var xs = new List<int64>()
+        defer xs.release()
+        xs.add(10)
+        xs.add(20)
+        match(xs.get(1)) {
+            case Some(v: int64) => use(v),
+            case None => useDefault()
+        }
+
+    `contains`, `indexOf` and `remove` compare elements with the `==` operator.
+    For primitives and `string` this is value equality; structs do not have
+    structural equality in the language yet.
 */
-import "@std/types/optional.qz"
-import "@std/collections/traits/collection.qz"
-import "@std/collections/traits/iterable.qz"
+import "@std/core/option.qz"
+import "@std/core/compare.qz"
 
-/*
-    Defines a generic List, a dynamic size collection of data.
-
-    Stores elements by index, allows duplicated values.
-*/  
-class List<T> implements Collection<T>, Iterable<T> {
-
-    // Raw data pointer
+struct List<T> {
+    // Raw data pointer.
     var data: ptr<T>
-
-    // The maximum capacity of the List without resizing it
+    // Allocated slots (in elements).
     var capacity: uint64
-
-    // The count of elements inside the List. Always lower or equal than the capacity.
+    // Number of elements currently stored.
     var size: uint64
 
-    function new(){
+    /*
+        Creates an empty List with an initial capacity of 16.
+    */
+    function List() {
         this.capacity = 16
         this.size = 0
-        this.data = alloc T[this.capacity]
+        this.data = new T[this.capacity]
     }
 
-    function new(capacity: uint64){
-        this.capacity = capacity
+    /*
+        Creates an empty List with an initial capacity of at least 1.
+    */
+    function List(initialCapacity: uint64) {
+        var cap = initialCapacity < 1 ? 1 : initialCapacity
+        this.capacity = cap
         this.size = 0
-        this.data = alloc T[this.capacity]
+        this.data = new T[cap]
     }
 
     /*
-        Clones the List data into a slice
-
-        Returns:
-            - A new slice with a deep copy of the data
+        Number of elements in the List.
     */
-    function cloneData(): T[] {
-        var newData: T[]
-        newData.ptr = alloc T[size]
-        newData.length = size
-        for(var i: uint64 = 0; i < size; i+= 1){
-            var dst = newData.ptr as int64 + i * sizeof(T)
-            var src = data as int64 + i * sizeof(T)
-            *(dst as ptr<T>) = *(src as ptr<T>)
-        }
-        return newData
-    }
-
-    function asSlice(): T[] {
-        var slice: T[]
-        slice.ptr = this.data
-        slice.length = size
-        return slice
-    }
+    function size() : uint64 => this.size
 
     /*
-        Adds a new element to the List.
-
-        Implementation of Collection.add
+        true when the List has no elements.
     */
-    function add(element: T){
-        if(this.size >= this.capacity){
+    function isEmpty() : bool => this.size == 0
+
+    /*
+        Appends an element, growing the capacity when needed.
+    */
+    function add(element: T) {
+        if(this.size >= this.capacity) {
             this.resize(this.capacity * 2)
         }
-        var off = this.data as int64 + this.size * sizeof(T)
-        *(off as ptr<T>) = element
+        *((this.data as int64 + this.size * sizeof(T)) as ptr<T>) = element
         this.size = this.size + 1
     }
 
     /*
-        Gets an element from the list based on the index
-
-        Arguments:
-            - index: The index to get the element
-
-        Returns:
-            - An Optional<T> with the value of the element in
-              index i if it exists, otherwise returns Optional.None
+        Alias for `add`.
     */
-    function get(index: uint64) : Optional<T> {
-        if(index < this.size){
-            var off = this.data as int64 + index * sizeof(T)
-            return Optional.Some(*(off as ptr<T>))
-        }
-        return Optional.None
+    function push(element: T) {
+        this.add(element)
     }
 
     /*
-        Sets a specific value in a determined position of the list
+        Removes and returns the last element, if any.
+    */
+    function pop() : Option<T> {
+        if(this.size == 0) return Option.None
+        this.size = this.size - 1
+        return Option.Some(this.data[this.size])
+    }
 
-        Arguments:
-            - index: The index to put the data
-            - value: The value to write
+    /*
+        Returns the element at `index`, or None if out of bounds.
+    */
+    function get(index: uint64) : Option<T> {
+        if(index >= this.size) return Option.None
+        return Option.Some(this.data[index])
+    }
 
-        Returns:
-            - true if the operation succeeds, false otherwise
+    /*
+        Returns the element at `index` without bounds checking. The caller must
+        guarantee `index < size`.
+    */
+    function getUnchecked(index: uint64) : T => this.data[index]
+
+    /*
+        Overwrites the element at `index`. Returns false if out of bounds.
     */
     function set(index: uint64, value: T) : bool {
-        if(index < this.size){
-            var off = this.data as int64 + index * sizeof(T)
-            *(off as ptr<T>) = value
-            return true
-        }
-        return false
+        if(index >= this.size) return false
+        *((this.data as int64 + index * sizeof(T)) as ptr<T>) = value
+        return true
     }
 
     /*
-        Inserts a value in a determined index
-
-        Moves every element with index greater than the
-        inserted to upper positions.
-
-        Arguments:
-            - index: The index to be inserted
-            - element: The value to be inserted
-
-        Returns:
-            - false if the index is out of bounds
-            - true if the operation succeeds, false otherwise
+        Inserts `element` at `index`, shifting the following elements right.
+        Returns false if `index > size`.
     */
     function insert(index: uint64, element: T) : bool {
-        if(index > this.size){
-            return false
-        }
-        if(this.size >= this.capacity){
+        if(index > this.size) return false
+        if(this.size >= this.capacity) {
             this.resize(this.capacity * 2)
         }
-        var i: uint64 = this.size
-        while(i > index){
-            var dstOff = this.data as int64 + i * sizeof(T)
-            var srcOff = this.data as int64 + (i - 1) * sizeof(T)
-            *(dstOff as ptr<T>) = *(srcOff as ptr<T>)
+        var i = this.size
+        while(i > index) {
+            *((this.data as int64 + i * sizeof(T)) as ptr<T>) = this.data[i - 1]
             i = i - 1
         }
-        var insOff = this.data as int64 + index * sizeof(T)
-        *(insOff as ptr<T>) = element
+        *((this.data as int64 + index * sizeof(T)) as ptr<T>) = element
         this.size = this.size + 1
         return true
     }
 
     /*
-        Removes an index of the List
-
-        Removes the element at the desired index and moves every element
-        to their (index - 1) to fill the gap. 
-
-        Arguments:
-            - index: The index to be removed
-
-        Returns:
-            - Optional.None if the index is out of bounds
-            - Optional.Some with the removed value if the operation succeeds
+        Removes the element at `index` and returns it, or None if out of
+        bounds.
     */
-    function removeAt(index: uint64) : Optional<T> {
-        if(index >= this.size){
-            return Optional.None
-        }
-        var off = this.data as int64 + index * sizeof(T)
-        var old = *(off as ptr<T>)
-        var i: uint64 = index
-        while(i < this.size - 1){
-            var dstOff = this.data as int64 + i * sizeof(T)
-            var srcOff = this.data as int64 + (i + 1) * sizeof(T)
-            *(dstOff as ptr<T>) = *(srcOff as ptr<T>)
+    function removeAt(index: uint64) : Option<T> {
+        if(index >= this.size) return Option.None
+        var old = this.data[index]
+        var i = index
+        while(i < this.size - 1) {
+            *((this.data as int64 + i * sizeof(T)) as ptr<T>) = this.data[i + 1]
             i = i + 1
         }
         this.size = this.size - 1
-        return Optional.Some(old)
+        return Option.Some(old)
     }
 
     /*
-        Removes an element from the list
+        First index of `element` (by `==`), or None if absent.
+    */
+    function indexOf(element: T) : Option<uint64> {
+        var i: uint64 = 0
+        while(i < this.size) {
+            if(this.data[i] == element) return Option.Some(i)
+            i = i + 1
+        }
+        return Option.None
+    }
 
-        Implementation of Collection.remove
+    /*
+        true when `element` is present (by `==`).
+    */
+    function contains(element: T) : bool {
+        var i: uint64 = 0
+        while(i < this.size) {
+            if(this.data[i] == element) return true
+            i = i + 1
+        }
+        return false
+    }
+
+    /*
+        Removes the first occurrence of `element` (by `==`). Returns true if an
+        element was removed.
     */
     function remove(element: T) : bool {
-        for(var i: uint64 = 0; i < this.size; i = i + 1){
-            var off = this.data as int64 + i * sizeof(T)
-            if(*(off as ptr<T>) == element){
+        var i: uint64 = 0
+        while(i < this.size) {
+            if(this.data[i] == element) {
                 this.removeAt(i)
                 return true
             }
+            i = i + 1
         }
         return false
     }
 
     /*
-        Checks if the List contains an element
-
-        Implementation of Collection.contains
+        Removes all elements. The capacity is kept.
     */
-    function contains(element: T) : bool {
-        for(var i: uint64 = 0; i < this.size; i = i + 1){
-            var off = this.data as int64 + i * sizeof(T)
-            if(*(off as ptr<T>) == element){
-                return true
-            }
-        }
-        return false
-    }
-
-    /*
-        Gets the size of the List
-
-        Implementation of Collection.size
-    */
-    function size() : uint64 => this.size
-
-    /*
-        Checks if the List is empty
-
-        Implementation of Collection.isEmpty
-    */
-    function isEmpty() : bool => this.size == 0
-
-    /*
-        Clears the List by setting its size to 0
-
-        Implementation of Collection.clear
-    */
-    function clear(){
+    function clear() {
         this.size = 0
     }
 
-    /* 
-        Gets the first element of the List
-
-        Returns:
-            - The first element of the list, if it's not empty
-            - Optional.None if there are no elements
+    /*
+        Calls `f(element)` for every element, in order.
     */
-    function first() : Optional<T> => this.get(0)
-
-    /* 
-        Gets the last element of the List
-
-        Returns:
-            - The last element of the list, if it's not empty
-            - Optional.None if there are no elements
-    */
-    function last() : Optional<T> => this.get(this.size - 1)
+    function forEach(f: (T) => void) {
+        var i: uint64 = 0
+        while(i < this.size) {
+            f(this.data[i])
+            i += 1
+        }
+    }
 
     /*
-        Resizes the List with a new capacity
-
-        Allocates a new buffer of memory, copies the previous data
-        and frees the original buffer.
-
-        Arguments:
-            - newCapacity: The new capacity value of the list
+        First element, or None if the List is empty.
     */
-    function resize(newCapacity: uint64){
-        var newData = alloc T[newCapacity]
-        var copySize: uint64 = this.size < newCapacity ? this.size : newCapacity
-        for(var i: uint64 = 0; i < copySize; i = i + 1){
-            var srcOff = this.data as int64 + i * sizeof(T)
-            var dstOff = newData as int64 + i * sizeof(T)
-            *(dstOff as ptr<T>) = *(srcOff as ptr<T>)
+    function first() : Option<T> {
+        if(this.size == 0) return Option.None
+        return Option.Some(this.data[0])
+    }
+
+    /*
+        Last element, or None if the List is empty.
+    */
+    function last() : Option<T> {
+        if(this.size == 0) return Option.None
+        return Option.Some(this.data[this.size - 1])
+    }
+
+    /*
+        A zero-copy slice view over the current elements.
+    */
+    function asSlice() : T[] {
+        var slice: T[]
+        slice.ptr = this.data
+        slice.length = this.size
+        return slice
+    }
+
+    /*
+        A deep copy of the current elements into a fresh slice. The caller owns
+        the returned buffer.
+    */
+    function cloneData() : T[] {
+        var slice: T[]
+        slice.length = this.size
+        slice.ptr = new T[this.size]
+        var i: uint64 = 0
+        while(i < this.size) {
+            *((slice.ptr as int64 + i * sizeof(T)) as ptr<T>) = this.data[i]
+            i = i + 1
+        }
+        return slice
+    }
+
+    /*
+        Grows the buffer to `newCapacity` elements, copying the live elements.
+    */
+    function resize(newCapacity: uint64) {
+        var newData = new T[newCapacity]
+        var copySize = this.size < newCapacity ? this.size : newCapacity
+        var i: uint64 = 0
+        while(i < copySize) {
+            *((newData as int64 + i * sizeof(T)) as ptr<T>) = this.data[i]
+            i = i + 1
         }
         free this.data
         this.data = newData
         this.capacity = newCapacity
     }
+
+    /*
+        Releases the backing buffer. The List must not be used afterwards.
+    */
+    function release() {
+        free this.data
+        this.data = null
+        this.capacity = 0
+        this.size = 0
+    }
+}
+
+/*
+    Value-equality variants of the search operations. They use `equals` and are
+    only instantiated when called, so a `List<Struct>` compiles without
+    requiring an `equals` overload unless you actually compare elements. Define
+    an `equals(a: T, b: T)` overload (or implement `Eq<T>`) for your struct to
+    use them.
+*/
+function listContains<T>(list: ptr<List<T>>, element: T) : bool {
+    var i: uint64 = 0
+    while(i < list.size) {
+        if(equals(list.data[i], element)) return true
+        i = i + 1
+    }
+    return false
+}
+
+function listIndexOf<T>(list: ptr<List<T>>, element: T) : Option<uint64> {
+    var i: uint64 = 0
+    while(i < list.size) {
+        if(equals(list.data[i], element)) return Option.Some(i)
+        i = i + 1
+    }
+    return Option.None
+}
+
+function listRemove<T>(list: ptr<List<T>>, element: T) : bool {
+    var i: uint64 = 0
+    while(i < list.size) {
+        if(equals(list.data[i], element)) {
+            list.removeAt(i)
+            return true
+        }
+        i = i + 1
+    }
+    return false
 }

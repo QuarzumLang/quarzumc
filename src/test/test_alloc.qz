@@ -1,5 +1,5 @@
 function main() {
-    var p = alloc int64
+    var p = new int64
     var val = *p
     free p
     exit 0

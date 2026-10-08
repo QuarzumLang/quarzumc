@@ -1,106 +1,40 @@
-import "@std/types/optional.qz"
-import "@std/collections/traits/collection.qz"
+/*
+    @std/collections/stack.qz
+    Stack<T>: a LIFO collection backed by `List<T>`.
+*/
+import "@std/collections/list.qz"
+import "@std/core/option.qz"
 
-class Stack<T> implements Collection<T> {
-    var data: ptr<T>
-    var capacity: uint64
-    var size: uint64
+struct Stack<T> {
+    var items: ptr<List<T>>
 
-    function new(){
-        this.capacity = 16
-        this.size = 0
-        this.data = alloc T[this.capacity]
+    function Stack() {
+        this.items = new List<T>()
     }
 
-    function new(capacity: uint64){
-        this.capacity = capacity
-        this.size = 0
-        this.data = alloc T[this.capacity]
+    function Stack(capacity: uint64) {
+        this.items = new List<T>(capacity)
     }
 
-    function push(element: T){
-        if(this.size >= this.capacity){
-            this.resize(this.capacity * 2)
-        }
-        var off = this.data as int64 + this.size * sizeof(T)
-        *(off as ptr<T>) = element
-        this.size = this.size + 1
+    function push(element: T) {
+        this.items.add(element)
     }
 
-    function pop() : Optional<T> {
-        if(this.size == 0){
-            return Optional.None
-        }
-        this.size = this.size - 1
-        var off = this.data as int64 + this.size * sizeof(T)
-        return Optional.Some(*(off as ptr<T>))
+    function pop() : Option<T> => this.items.pop()
+
+    function peek() : Option<T> => this.items.last()
+
+    function size() : uint64 => this.items.size()
+
+    function isEmpty() : bool => this.items.isEmpty()
+
+    function clear() {
+        this.items.clear()
     }
 
-    function peek() : Optional<T> {
-        if(this.size == 0){
-            return Optional.None
-        }
-        var off = this.data as int64 + (this.size - 1) * sizeof(T)
-        return Optional.Some(*(off as ptr<T>))
-    }
-
-    function add(element: T){
-        this.push(element)
-    }
-
-    function remove(element: T) : bool {
-        if(this.size == 0){
-            return false
-        }
-        for(var i: uint64 = 0; i < this.size; i = i + 1){
-            var off = this.data as int64 + i * sizeof(T)
-            if(*(off as ptr<T>) == element){
-                var j: uint64 = i
-                while(j < this.size - 1){
-                    var dstOff = this.data as int64 + j * sizeof(T)
-                    var srcOff = this.data as int64 + (j + 1) * sizeof(T)
-                    *(dstOff as ptr<T>) = *(srcOff as ptr<T>)
-                    j = j + 1
-                }
-                this.size = this.size - 1
-                return true
-            }
-        }
-        return false
-    }
-
-    function contains(element: T) : bool {
-        for(var i: uint64 = 0; i < this.size; i = i + 1){
-            var off = this.data as int64 + i * sizeof(T)
-            if(*(off as ptr<T>) == element){
-                return true
-            }
-        }
-        return false
-    }
-
-    function size() : uint64 {
-        return this.size
-    }
-
-    function isEmpty() : bool {
-        return this.size == 0
-    }
-
-    function clear(){
-        this.size = 0
-    }
-
-    function resize(newCapacity: uint64){
-        var newData = alloc T[newCapacity]
-        var copySize: uint64 = this.size < newCapacity ? this.size : newCapacity
-        for(var i: uint64 = 0; i < copySize; i = i + 1){
-            var srcOff = this.data as int64 + i * sizeof(T)
-            var dstOff = newData as int64 + i * sizeof(T)
-            *(dstOff as ptr<T>) = *(srcOff as ptr<T>)
-        }
-        free this.data
-        this.data = newData
-        this.capacity = newCapacity
+    function release() {
+        this.items.release()
+        free this.items
+        this.items = null
     }
 }

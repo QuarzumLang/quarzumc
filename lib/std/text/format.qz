@@ -1,0 +1,97 @@
+/*
+    @std/text/format.qz
+    Variadic-free formatting helpers built on `StringBuilder`.
+
+    For inline formatting prefer string interpolation (`"x=${expr}"`). These
+    helpers are useful when the pieces are already collected in an array.
+*/
+import "@std/string.qz"
+import "@std/text/builder.qz"
+
+/*
+    Replaces each `{}` in `template` with the next element of `args`. Extra
+    placeholders are left as `{}`; extra arguments are ignored.
+*/
+function format(template: string, args: string[]) : string {
+    var builder = new StringBuilder(template.length + 16)
+    defer builder.release()
+    var argIndex: uint64 = 0
+    var i: uint64 = 0
+    while(i < template.length) {
+        if(i + 1 < template.length and template[i] == '{' and template[i + 1] == '}') {
+            if(argIndex < args.length) {
+                builder.append(args[argIndex])
+                argIndex += 1
+            } else {
+                builder.append("{}")
+            }
+            i += 2
+        } else {
+            builder.append(template[i])
+            i += 1
+        }
+    }
+    return builder.build()
+}
+
+/*
+    Joins `parts` with `separator` between them.
+*/
+function join(parts: string[], separator: string) : string {
+    var builder = new StringBuilder()
+    defer builder.release()
+    var i: uint64 = 0
+    while(i < parts.length) {
+        if(i > 0) builder.append(separator)
+        builder.append(parts[i])
+        i += 1
+    }
+    return builder.build()
+}
+
+/*
+    `text` repeated `count` times.
+*/
+function repeat(text: string, count: uint64) : string {
+    var builder = new StringBuilder(text.length * count + 1)
+    defer builder.release()
+    var i: uint64 = 0
+    while(i < count) {
+        builder.append(text)
+        i += 1
+    }
+    return builder.build()
+}
+
+/*
+    Left-pads `text` with `fill` up to `width` characters (or returns it
+    unchanged when it is already at least that long).
+*/
+function padLeft(text: string, width: uint64, fill: char) : string {
+    if(text.length >= width) return text
+    var builder = new StringBuilder(width + 1)
+    defer builder.release()
+    var i: uint64 = text.length
+    while(i < width) {
+        builder.append(fill)
+        i += 1
+    }
+    builder.append(text)
+    return builder.build()
+}
+
+/*
+    Right-pads `text` with `fill` up to `width` characters.
+*/
+function padRight(text: string, width: uint64, fill: char) : string {
+    if(text.length >= width) return text
+    var builder = new StringBuilder(width + 1)
+    defer builder.release()
+    builder.append(text)
+    var i: uint64 = text.length
+    while(i < width) {
+        builder.append(fill)
+        i += 1
+    }
+    return builder.build()
+}

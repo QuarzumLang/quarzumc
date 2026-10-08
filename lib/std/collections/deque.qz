@@ -1,0 +1,126 @@
+/*
+    @std/collections/deque.qz
+    Deque<T>: a double-ended queue backed by a growable ring buffer.
+
+    Push/pop at both ends are amortized O(1); indexing is O(1).
+*/
+import "@std/core/option.qz"
+
+struct Deque<T> {
+    var data: ptr<T>
+    var capacity: uint64
+    // Index of the first element.
+    var head: uint64
+    var size: uint64
+
+    function Deque() {
+        this.capacity = 8
+        this.head = 0
+        this.size = 0
+        this.data = new T[this.capacity]
+    }
+
+    function Deque(initialCapacity: uint64) {
+        var cap = initialCapacity < 4 ? 4 : initialCapacity
+        this.capacity = cap
+        this.head = 0
+        this.size = 0
+        this.data = new T[cap]
+    }
+
+    // Physical slot for logical index `i`.
+    function phys(i: uint64) : uint64 => (this.head + i) % this.capacity
+
+    function ensure(extra: uint64) {
+        if(this.size + extra <= this.capacity) return
+        var newCapacity = this.capacity * 2
+        while(newCapacity < this.size + extra) {
+            newCapacity = newCapacity * 2
+        }
+        var newData = new T[newCapacity]
+        var i: uint64 = 0
+        while(i < this.size) {
+            newData[i] = this.data[this.phys(i)]
+            i += 1
+        }
+        free this.data
+        this.data = newData
+        this.capacity = newCapacity
+        this.head = 0
+    }
+
+    function pushBack(value: T) {
+        this.ensure(1)
+        this.data[this.phys(this.size)] = value
+        this.size = this.size + 1
+    }
+
+    function pushFront(value: T) {
+        this.ensure(1)
+        this.head = (this.head + this.capacity - 1) % this.capacity
+        this.data[this.head] = value
+        this.size = this.size + 1
+    }
+
+    function popBack() : Option<T> {
+        if(this.size == 0) return Option.None
+        this.size = this.size - 1
+        return Option.Some(this.data[this.phys(this.size)])
+    }
+
+    function popFront() : Option<T> {
+        if(this.size == 0) return Option.None
+        var value = this.data[this.head]
+        this.head = (this.head + 1) % this.capacity
+        this.size = this.size - 1
+        return Option.Some(value)
+    }
+
+    function get(index: uint64) : Option<T> {
+        if(index >= this.size) return Option.None
+        return Option.Some(this.data[this.phys(index)])
+    }
+
+    function getUnchecked(index: uint64) : T => this.data[this.phys(index)]
+
+    function set(index: uint64, value: T) : bool {
+        if(index >= this.size) return false
+        this.data[this.phys(index)] = value
+        return true
+    }
+
+    function first() : Option<T> {
+        if(this.size == 0) return Option.None
+        return Option.Some(this.data[this.head])
+    }
+
+    function last() : Option<T> {
+        if(this.size == 0) return Option.None
+        return Option.Some(this.data[this.phys(this.size - 1)])
+    }
+
+    function forEach(f: (T) => void) {
+        var i: uint64 = 0
+        while(i < this.size) {
+            f(this.data[this.phys(i)])
+            i += 1
+        }
+    }
+
+    function size() : uint64 => this.size
+
+    function isEmpty() : bool => this.size == 0
+
+    function clear() {
+        this.head = 0
+        this.size = 0
+    }
+
+    function release() {
+        free this.data
+        this.data = null
+        this.capacity = 0
+        this.head = 0
+        this.size = 0
+    }
+}

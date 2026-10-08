@@ -1,0 +1,32 @@
+// Method overloading by parameter types.
+
+struct Foo {
+    var v: int64
+
+    function Foo() { this.v = 0 }
+
+    function set(x: int64) { this.v = x }
+    function set(s: string) { this.v = s.length }
+    function set(b: bool) { this.v = b ? 1 : 0 }
+    function set(c: char) { this.v = c as int64 }
+
+    function get(): int64 => this.v
+}
+
+function main() {
+    var f = Foo()
+
+    f.set(42)
+    if(f.get() != 42) return 1
+
+    f.set("hello")
+    if(f.get() != 5) return 1
+
+    f.set(true)
+    if(f.get() != 1) return 1
+
+    f.set('A')
+    if(f.get() != 65) return 1
+
+    return 0
+}

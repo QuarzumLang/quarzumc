@@ -1,0 +1,55 @@
+// Trait bounds on generic functions and structs: <T: Ord>, <T: Ord + Eq>.
+
+import "@std/core/compare.qz"
+
+struct Pt implements Ord<Pt> {
+    var x: int64
+
+    function Pt(x: int64) {
+        this.x = x
+    }
+
+    function compare(other: Pt): int64 => this.x < other.x ? -1 : (this.x > other.x ? 1 : 0)
+}
+
+// Free overload so generic code calling `compare(a, b)` resolves for Pt.
+function compare(a: Pt, b: Pt): int64 => a.x < b.x ? -1 : (a.x > b.x ? 1 : 0)
+
+struct Box<T: Ord> {
+    var v: T
+
+    function Box(v: T) {
+        this.v = v
+    }
+
+    function maxWith(other: Box<T>): T {
+        if(compare(this.v, other.v) < 0) return other.v
+        return this.v
+    }
+}
+
+function maxOf<T: Ord>(a: T, b: T): T {
+    if(compare(a, b) < 0) return b
+    return a
+}
+
+function pick<T: Ord + Eq>(a: T, b: T): T => a
+
+function main() {
+    // Primitive satisfies Ord.
+    if(maxOf(3, 7) != 7) return 1
+
+    // Struct satisfies Ord via its `compare` method / overload.
+    var m = maxOf(Pt(2), Pt(9))
+    if(m.x != 9) return 1
+
+    // Generic struct with a bound.
+    var b1 = Box<int64>(3)
+    var b2 = Box<int64>(8)
+    if(b1.maxWith(b2) != 8) return 1
+
+    // Multiple bounds + explicit type arguments.
+    if(pick<int64>(4, 5) != 4) return 1
+
+    return 0
+}

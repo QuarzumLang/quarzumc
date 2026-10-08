@@ -81,10 +81,6 @@ bool is_compatible(Type* t1, Type* t2) {
     if(is_numeric(t1) && is_numeric(t2))
         return true;
 
-    if ((t1->kind == TY_PTR && t2->kind == TY_REF) ||
-        (t1->kind == TY_REF && t2->kind == TY_PTR))
-        return is_compatible(t1->base, t2->base);
-
     // string (TY_STRING) and char[] (TY_ARRAY of char) are the same type
     if ((t1->kind == TY_STRING && t2->kind == TY_ARRAY) ||
         (t2->kind == TY_STRING && t1->kind == TY_ARRAY)){
@@ -110,8 +106,6 @@ bool is_compatible(Type* t1, Type* t2) {
         case TY_FLOAT64:
             return true;
         case TY_PTR:
-            return is_compatible(t1->base, t2->base);
-        case TY_REF:
             return is_compatible(t1->base, t2->base);
         case TY_FUNC: {
             if (!is_compatible(t1->function.return_type, t2->function.return_type))
@@ -168,12 +162,6 @@ Type* pointer_to(Type* base) {
     return ty;
 }
 
-Type* ref_type(Type* base) {
-    Type* ty = new_type(TY_REF, 8, 8);
-    ty->base = base;
-    return ty;
-}
-
 Type* func_type(Type* return_type) {
     Type *ty = new_type(TY_FUNC, 8, 8);
     ty->function.return_type = return_type;
@@ -211,6 +199,14 @@ Type* struct_type(StructDef* def) {
   ty->structure.members = NULL;
   ty->structure.is_flexible = false;
   ty->structure.is_packed = false;
+  // Carry the generic application metadata (template + type args) so that
+  // inference can match `List<T>` against `List<int64>`.
+  ClassDef* cdef = class_table_lookup(def->name);
+  if(cdef && cdef->template_def){
+    ty->structure.generic_template = cdef->template_def;
+    ty->structure.type_args = cdef->type_args;
+    ty->structure.type_arg_count = cdef->type_arg_count;
+  }
   return ty;
 }
 
@@ -308,7 +304,7 @@ const char* type_kind_to_name(Type* type){
         case TY_CHAR: return "char";
         case TY_STRING: return "array";  // string is compatible with uint8[]
         case TY_PTR: return "ptr";
-        case TY_REF: return type->base ? type_kind_to_name(type->base) : "ptr";  // ref<T> resolves to T's name
+        case TY_FUNC: return "func";
         case TY_ARRAY: return "array";
         case TY_ENUM: return type->enumeration.def->name;
         case TY_STRUCT: return type->structure.struct_def->name;
@@ -374,14 +370,6 @@ static char* type_to_expr_string(Type* t){
         }
         case TY_PTR: {
             strcpy(buf, "ptr<");
-            char* sub = type_to_expr_string(t->base);
-            strcat(buf, sub);
-            free(sub);
-            strcat(buf, ">");
-            break;
-        }
-        case TY_REF: {
-            strcpy(buf, "ref<");
             char* sub = type_to_expr_string(t->base);
             strcat(buf, sub);
             free(sub);
@@ -498,8 +486,6 @@ Type* enum_instantiate(ParserState* state, Type* def_type, Type** type_args, int
 
 static Type *get_common_type(Type *ty1, Type *ty2) {
     if (ty1->base) {
-        if (ty1->kind == TY_REF || ty2->kind == TY_REF)
-            return ref_type(ty1->base);
         return pointer_to(ty1->base);
     }
 
@@ -611,8 +597,8 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
 
     switch(node->type){
         case ND_INTLIT:
-            // Use int64 by default to be compatible with pointer arithmetic
-            node->ty = ty_int64;
+            // Character literals already carry ty_char (set at parse time).
+            if(!node->ty) node->ty = ty_int64;
             break;
         case ND_FLOATLIT:
             switch(node->floatlit.float_kind){
@@ -663,7 +649,7 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
                                 check_type_error("string operator only supports +", node);
                             node->ty = lty;
                         } else {
-                            if(!is_numeric(lty) && lty->kind != TY_PTR && lty->kind != TY_REF)
+                            if(!is_numeric(lty) && lty->kind != TY_PTR)
                                 check_type_error("arithmetic operator requires numeric or pointer operand", node);
                             node->ty = lty ? lty : rty;
                         }
@@ -739,6 +725,7 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
         }
         case ND_CAST:
             check_expr(node->cast.expr, local, global);
+            resolve_funcref_expected(node->cast.expr, node->cast.target_type);
             node->ty = node->cast.target_type;
             break;
         case ND_ALLOC:
@@ -750,8 +737,6 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
             check_expr(node->index_expr.base, local, global);
             check_expr(node->index_expr.index, local, global);
             Type* bty = node->index_expr.base->ty;
-            if(bty && bty->kind == TY_REF)
-                check_type_error("cannot index a ref (ref cannot be indexed; use ptr instead)", node);
             Type* ity = node->index_expr.index->ty;
             if(ity && !(is_any_int(ity) || ity->kind == TY_CHAR || ity->kind == TY_ENUM)){
                 fprintf(stderr, "type error: array index must be an integer\n");
@@ -783,7 +768,7 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
                             sdef->name, node->member.field_name);
                     exit(1);
                 }
-            } else if(bty && (bty->kind == TY_PTR || bty->kind == TY_REF) &&
+            } else if(bty && bty->kind == TY_PTR &&
                       bty->base && bty->base->kind == TY_STRUCT &&
                       bty->base->structure.struct_def){
                 StructDef* sdef = bty->base->structure.struct_def;
@@ -1024,7 +1009,7 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
             }
             {
                 StructDef* sdef = struct_table_lookup(node->new_expr.class_name);
-                if(sdef) node->ty = ref_type(struct_type(sdef));
+                if(sdef) node->ty = pointer_to(struct_type(sdef));
             }
             break;
         case ND_METHODCALL:
@@ -1033,16 +1018,90 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
                 for(uint64_t i = 0; i < node->methodcall.args->length; i++)
                     check_expr(node->methodcall.args->nodes[i], local, global);
             }
+            // Derive the receiver's struct name when it was unknown at parse
+            // time (e.g. the result of a generic call).
+            if(!node->methodcall.class_name){
+                Type* oty = node->methodcall.object->ty;
+                if(oty && oty->kind == TY_PTR &&
+                   oty->base && oty->base->kind == TY_STRUCT && oty->base->structure.struct_def){
+                    node->methodcall.class_name = oty->base->structure.struct_def->name;
+                } else if(oty && oty->kind == TY_STRUCT && oty->structure.struct_def){
+                    node->methodcall.class_name = oty->structure.struct_def->name;
+                }
+            }
             if(node->methodcall.class_name){
-                ClassDef* cdef = class_table_lookup(node->methodcall.class_name);
-                if(cdef){
-                    for(uint64_t i = 0; i < cdef->methods->length; i++){
-                        Node* m = cdef->methods->nodes[i];
-                        char* suffix = strrchr(m->funcdef.name, '_');
-                        if(suffix && strcmp(suffix + 1, node->methodcall.method) == 0){
-                            node->ty = m->funcdef.return_type;
-                            break;
+                // Resolve the overload by building ClassName_method[_type...]
+                // from the argument types, with the same integer promotions as
+                // free functions.
+                char* base = malloc(strlen(node->methodcall.class_name) + 1 +
+                                    strlen(node->methodcall.method) + 1);
+                sprintf(base, "%s_%s", node->methodcall.class_name, node->methodcall.method);
+
+                Node* target = NULL;
+                char* candidate = NULL;
+                if(node->methodcall.args){
+                    size_t len = strlen(base) + 1;
+                    candidate = malloc(len);
+                    strcpy(candidate, base);
+                    bool can_resolve = true;
+                    for(uint64_t i = 0; i < node->methodcall.args->length; i++){
+                        Type* at = node->methodcall.args->nodes[i]->ty;
+                        if(!at){ can_resolve = false; break; }
+                        const char* tn = type_kind_to_name(at);
+                        len += 1 + strlen(tn);
+                        candidate = realloc(candidate, len);
+                        strcat(candidate, "_");
+                        strcat(candidate, tn);
+                    }
+                    if(!can_resolve){
+                        free(candidate);
+                        candidate = NULL;
+                    }
+                } else {
+                    candidate = strdup(base);
+                }
+                if(candidate) target = function_table_lookup(candidate);
+                if(!target){
+                    if(candidate) free(candidate);
+                    candidate = resolve_promoted_funcall(base, node->methodcall.args);
+                    target = candidate ? function_table_lookup(candidate) : NULL;
+                }
+                free(base);
+                if(target){
+                    node->methodcall.mangled_name = candidate;
+                    node->ty = target->funcdef.return_type;
+                    candidate = NULL;
+                }
+                if(candidate) free(candidate);
+
+                if(!node->ty){
+                    // Fallback: a single method whose name matches (prefix)
+                    // resolves even when the argument types do not match by
+                    // promotion (e.g. a literal passed to a narrower parameter).
+                    ClassDef* cdef = class_table_lookup(node->methodcall.class_name);
+                    const char* cname = node->methodcall.class_name;
+                    size_t cl = strlen(cname);
+                    const char* method = node->methodcall.method;
+                    size_t ml = strlen(method);
+                    Node* only = NULL;
+                    int matches = 0;
+                    if(cdef){
+                        for(uint64_t i = 0; i < cdef->methods->length; i++){
+                            Node* m = cdef->methods->nodes[i];
+                            const char* mg = m->funcdef.name;
+                            if(mg && strncmp(mg, cname, cl) == 0 && mg[cl] == '_'){
+                                const char* rest = mg + cl + 1;
+                                if(strncmp(rest, method, ml) == 0 &&
+                                   (rest[ml] == '\0' || rest[ml] == '_')){
+                                    only = m;
+                                    matches++;
+                                }
+                            }
                         }
+                    }
+                    if(matches == 1){
+                        node->methodcall.mangled_name = only->funcdef.name;
+                        node->ty = only->funcdef.return_type;
                     }
                 }
             }
@@ -1050,6 +1109,20 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
         case ND_THIS:
             break;
         case ND_NULL:
+            break;
+        case ND_FUNCREF:
+            // Type is set at parse time from the referenced funcdef.
+            break;
+        case ND_INDIRECTCALL:
+            check_expr(node->indirect_call.callee, local, global);
+            if(node->indirect_call.args){
+                for(uint64_t i = 0; i < node->indirect_call.args->length; i++)
+                    check_expr(node->indirect_call.args->nodes[i], local, global);
+            }
+            if(node->indirect_call.callee->ty &&
+               node->indirect_call.callee->ty->kind == TY_FUNC){
+                node->ty = node->indirect_call.callee->ty->function.return_type;
+            }
             break;
         case ND_PASS:
             node->ty = ty_void;
@@ -1062,6 +1135,7 @@ static void check_expr(Node* node, SymbolTable* local, SymbolTable* global){
 static void check_vardecl(Node* node, SymbolTable* local, SymbolTable* global){
     if(node->vardecl.init){
         check_expr(node->vardecl.init, local, global);
+        resolve_funcref_expected(node->vardecl.init, node->vardecl.type);
         if(node->vardecl.type && node->vardecl.init->ty){
             if(!is_compatible(node->vardecl.type, node->vardecl.init->ty)){
                 fprintf(stderr, "DEBUG: vardecl '%s' type mismatch: type=%p init->ty=%p\n",
@@ -1136,6 +1210,7 @@ static void check_stmt(Node* node, SymbolTable* local, SymbolTable* global){
             Symbol* sym = check_lookup(local, global, node->assign.name);
             if(sym && sym->type && node->assign.value){
                 check_expr(node->assign.value, local, global);
+                resolve_funcref_expected(node->assign.value, sym->type);
                 if(node->assign.value->ty && !is_compatible(sym->type, node->assign.value->ty))
                     check_type_error("assignment type mismatch", node);
             } else if(node->assign.value){
@@ -1146,13 +1221,13 @@ static void check_stmt(Node* node, SymbolTable* local, SymbolTable* global){
         case ND_RETURN:
             if(node->return_stmt.expr){
                 check_expr(node->return_stmt.expr, local, global);
+                resolve_funcref_expected(node->return_stmt.expr, current_return_type);
                 Type* ety = node->return_stmt.expr->ty;
                 if(current_return_type && ety && current_return_type->kind != TY_VOID){
                     bool ret_slice = (current_return_type->kind == TY_STRING ||
                                       current_return_type->kind == TY_ARRAY);
                     bool expr_slice = (ety->kind == TY_STRING || ety->kind == TY_ARRAY);
-                    bool ret_ptr = (current_return_type->kind == TY_PTR ||
-                                    current_return_type->kind == TY_REF);
+                    bool ret_ptr = (current_return_type->kind == TY_PTR);
                     bool expr_int = is_any_int(ety) || ety->kind == TY_CHAR;
                     if(!(ret_slice && expr_slice) && !(ret_ptr && expr_int) &&
                        !is_compatible(current_return_type, ety)){
@@ -1175,14 +1250,17 @@ static void check_stmt(Node* node, SymbolTable* local, SymbolTable* global){
             check_expr(node->member_assign.value, local, global);
             if(!in_constructor_check){
                 Type* obj_type = node->member_assign.object->ty;
-                if(obj_type && (obj_type->kind == TY_PTR || obj_type->kind == TY_REF) &&
+                StructDef* asdef = NULL;
+                if(obj_type && obj_type->kind == TY_PTR &&
                    obj_type->base && obj_type->base->kind == TY_STRUCT){
-                    StructDef* sdef = obj_type->base->structure.struct_def;
-                    if(sdef){
-                        for(int i = 0; i < sdef->member_count; i++){
-                            if(strcmp(sdef->members[i].name, node->member_assign.field_name) == 0 && sdef->members[i].is_const){
-                                check_type_error("cannot assign to const field outside constructor", node);
-                            }
+                    asdef = obj_type->base->structure.struct_def;
+                } else if(obj_type && obj_type->kind == TY_STRUCT){
+                    asdef = obj_type->structure.struct_def;
+                }
+                if(asdef){
+                    for(int i = 0; i < asdef->member_count; i++){
+                        if(strcmp(asdef->members[i].name, node->member_assign.field_name) == 0 && asdef->members[i].is_const){
+                            check_type_error("cannot assign to const field outside constructor", node);
                         }
                     }
                 }
@@ -1197,10 +1275,13 @@ static void check_stmt(Node* node, SymbolTable* local, SymbolTable* global){
         case ND_EXPR_STMT:
             check_expr(node->expr_stmt.expr, local, global);
             break;
+        case ND_DEFER:
+            check_stmt(node->defer_stmt.stmt, local, global);
+            break;
         case ND_FREE:
             check_expr(node->free.expr, local, global);
-            if(node->free.expr->ty && node->free.expr->ty->kind != TY_PTR && node->free.expr->ty->kind != TY_REF)
-                check_type_error("free requires ptr or ref operand", node);
+            if(node->free.expr->ty && node->free.expr->ty->kind != TY_PTR)
+                check_type_error("free requires a ptr operand", node);
             break;
         case ND_MATCH:
             check_expr(node, local, global);
@@ -1231,7 +1312,7 @@ void resolve_types(Node* ast){
     for(uint64_t i = 0; i < ast->program_node.children->length; i++){
         Node* child = ast->program_node.children->nodes[i];
         if(child->type == ND_FUNCDEF){
-            in_constructor_check = (strstr(child->funcdef.name, "_new_") != NULL);
+            in_constructor_check = (strstr(child->funcdef.name, "_ctor_") != NULL);
             current_return_type = child->funcdef.return_type;
             current_func_name = child->funcdef.name;
             SymbolTable* local = (SymbolTable*)child->funcdef.scope;
@@ -1262,7 +1343,7 @@ void resolve_types(Node* ast){
         if(child->type == ND_FUNCDEF && child->funcdef.body){
             current_return_type = child->funcdef.return_type;
             current_func_name = child->funcdef.name;
-            in_constructor_check = (strstr(child->funcdef.name, "_new_") != NULL);
+            in_constructor_check = (strstr(child->funcdef.name, "_ctor_") != NULL);
             SymbolTable* local = (SymbolTable*)child->funcdef.scope;
             check_stmts(child->funcdef.body, local, global);
         }

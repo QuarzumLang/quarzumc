@@ -23,10 +23,10 @@ import "@std/syscall.qz"
     Members:
         - nanos: The length of time in nanoseconds
 */
-class Duration {
+struct Duration {
     var nanos: int64
 
-    function new(nanos: int64){
+    function Duration(nanos: int64){
         this.nanos = nanos
     }
 
@@ -79,7 +79,7 @@ class Duration {
             - other: The duration to add
     */
     function add(other: Duration): Duration {
-        return new Duration(this.nanos + other.nanos)
+        return Duration(this.nanos + other.nanos)
     }
 
     /*
@@ -89,7 +89,7 @@ class Duration {
             - other: The duration to subtract
     */
     function sub(other: Duration): Duration {
-        return new Duration(this.nanos - other.nanos)
+        return Duration(this.nanos - other.nanos)
     }
 
     /*
@@ -115,7 +115,7 @@ class Duration {
     function sleep(){
         var req: char[]
         req.length = 16
-        req.ptr = alloc char[16]
+        req.ptr = new char[16]
         var base = req.ptr as int64
         *((base + 0) as ptr<int64>) = this.nanos / 1000000000
         *((base + 8) as ptr<int64>) = this.nanos % 1000000000
@@ -129,7 +129,7 @@ class Duration {
     */
     function toString(): string {
         if(this.nanos < 0){
-            const neg = new Duration(-this.nanos)
+            const neg = Duration(-this.nanos)
             return "-" + neg.toString()
         }
         var h = this.nanos / 3600000000000
@@ -151,7 +151,7 @@ class Duration {
         - n: The number of nanoseconds
 */
 function ofNanos(n: int64): Duration {
-    return new Duration(n)
+    return Duration(n)
 }
 
 /*
@@ -161,7 +161,7 @@ function ofNanos(n: int64): Duration {
         - us: The number of microseconds
 */
 function ofMicros(us: int64): Duration {
-    return new Duration(us * 1000)
+    return Duration(us * 1000)
 }
 
 /*
@@ -171,7 +171,7 @@ function ofMicros(us: int64): Duration {
         - ms: The number of milliseconds
 */
 function ofMillis(ms: int64): Duration {
-    return new Duration(ms * 1000000)
+    return Duration(ms * 1000000)
 }
 
 /*
@@ -181,7 +181,7 @@ function ofMillis(ms: int64): Duration {
         - s: The number of seconds
 */
 function ofSeconds(s: int64): Duration {
-    return new Duration(s * 1000000000)
+    return Duration(s * 1000000000)
 }
 
 /*
@@ -191,7 +191,7 @@ function ofSeconds(s: int64): Duration {
         - m: The number of minutes
 */
 function ofMinutes(m: int64): Duration {
-    return new Duration(m * 60000000000)
+    return Duration(m * 60000000000)
 }
 
 /*
@@ -201,5 +201,5 @@ function ofMinutes(m: int64): Duration {
         - h: The number of hours
 */
 function ofHours(h: int64): Duration {
-    return new Duration(h * 3600000000000)
+    return Duration(h * 3600000000000)
 }

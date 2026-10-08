@@ -1,0 +1,19 @@
+import "@std/mem/arena.qz"
+
+function main() {
+    var a = new Arena(1024)
+    defer a.release()
+
+    var p = a.alloc(4 * sizeof(int64)) as ptr<int64>
+    *p = 10
+    *((p as int64 + 8) as ptr<int64>) = 20
+    *((p as int64 + 16) as ptr<int64>) = 30
+    *((p as int64 + 24) as ptr<int64>) = 40
+
+    var sum = p[0] + p[1] + p[2] + p[3]
+
+    a.reset()
+    if(a.remaining() != 1024) return 1
+    if(sum != 100) return 1
+    return 0
+}

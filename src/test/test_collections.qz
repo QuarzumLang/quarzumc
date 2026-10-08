@@ -1,0 +1,70 @@
+// Collections: Map/Set with string keys, and List iterator adapters.
+
+import "@std/collections/map.qz"
+import "@std/collections/set.qz"
+import "@std/collections/list.qz"
+import "@std/collections/iter.qz"
+import "@std/core/option.qz"
+
+function inc(x: int64): int64 => x + 1
+function isEven(x: int64): bool => x % 2 == 0
+function add(a: int64, b: int64): int64 => a + b
+function isBig(x: int64): bool => x > 3
+function isPos(x: int64): bool => x > 0
+
+function main() {
+    // Map with string keys (hashValue + equals).
+    var m = new Map<string, int64>()
+    defer m.release()
+    m.put("one", 1)
+    m.put("two", 2)
+    m.put("three", 3)
+    if(m.size() != 3) return 1
+    var v = m.get("two")
+    if(isNone(v) || unwrap(v) != 2) return 1
+    if(not m.has("three")) return 1
+    if(m.has("four")) return 1
+    m.put("two", 22)
+    if(unwrap(m.get("two")) != 22) return 1
+    if(not m.remove("one")) return 1
+    if(m.size() != 2) return 1
+
+    // Set with string keys.
+    var s = new Set<string>()
+    defer s.release()
+    s.add("a")
+    s.add("b")
+    s.add("a")
+    if(s.size() != 2) return 1
+    if(not s.contains("b")) return 1
+    if(s.contains("c")) return 1
+    if(not s.remove("a")) return 1
+    if(s.contains("a")) return 1
+
+    // List iterator adapters (function values).
+    var xs = new List<int64>()
+    defer xs.release()
+    xs.add(1)
+    xs.add(2)
+    xs.add(3)
+    xs.add(4)
+
+    var doubled = map(xs, inc)
+    defer doubled.release()
+    if(doubled.size() != 4) return 1
+    if(doubled.getUnchecked(0) != 2 || doubled.getUnchecked(3) != 5) return 1
+
+    var evens = filter(xs, isEven)
+    defer evens.release()
+    if(evens.size() != 2) return 1
+    if(evens.getUnchecked(0) != 2 || evens.getUnchecked(1) != 4) return 1
+
+    if(fold(xs, 0, add) != 10) return 1
+    if(not any(xs, isBig)) return 1
+    if(not all(xs, isPos)) return 1
+
+    var found = find(xs, isBig)
+    if(isNone(found) || unwrap(found) != 4) return 1
+
+    return 0
+}

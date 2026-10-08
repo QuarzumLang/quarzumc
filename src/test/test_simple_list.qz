@@ -1,12 +1,12 @@
-class SimpleList<T> {
+struct SimpleList<T> {
     var data: ptr<T>
     var capacity: uint64
     var size: uint64
 
-    function new(){
+    function SimpleList(){
         this.capacity = 16
         this.size = 0
-        this.data = alloc T[this.capacity]
+        this.data = new T[this.capacity]
     }
 
     function add(element: T){
@@ -27,7 +27,7 @@ class SimpleList<T> {
     }
 
     function resize(newCapacity: uint64){
-        var newData = alloc T[newCapacity]
+        var newData = new T[newCapacity]
         var copySize: uint64 = this.size < newCapacity ? this.size : newCapacity
         for(var i: uint64 = 0; i < copySize; i = i + 1){
             var srcOff = this.data as int64 + i * sizeof(T)
@@ -47,7 +47,7 @@ function main(){
     l.add(30)
     var first = l.get(0)
     if(first == 10){
-        return 1
+        return 0
     }
-    return 0
+    return 1
 }

@@ -1,0 +1,63 @@
+/*
+    @std/core/result.qz
+    Result<T, E>: either a success value (`Ok`) or an error (`Err`).
+
+    Recoverable failures are values, not exceptions:
+
+        match(readFile(path)) {
+            case Ok(data: string) => use(data),
+            case Err(e: IOError) => report(e)
+        }
+*/
+import "@std/core/panic.qz"
+
+enum Result<T, E> {
+    Ok(T),
+    Err(E)
+}
+
+/*
+    true when the Result is Ok.
+*/
+function isOk<T, E>(result: Result<T, E>): bool => match(result) {
+    case Ok(value: T) => true,
+    case Err(e: E) => false
+}
+
+/*
+    true when the Result is Err.
+*/
+function isErr<T, E>(result: Result<T, E>): bool => match(result) {
+    case Ok(value: T) => false,
+    case Err(e: E) => true
+}
+
+/*
+    Returns the success value, or panics on Err.
+*/
+function unwrap<T, E>(result: Result<T, E>): T {
+    if(result == Result.Ok(value: T)) {
+        return value
+    }
+    panic("called unwrap on an Err Result")
+}
+
+/*
+    Returns the error value, or panics on Ok.
+*/
+function unwrapErr<T, E>(result: Result<T, E>): E {
+    if(result == Result.Err(e: E)) {
+        return e
+    }
+    panic("called unwrapErr on an Ok Result")
+}
+
+/*
+    Returns the success value, or `fallback` on Err.
+*/
+function unwrapOr<T, E>(result: Result<T, E>, fallback: T): T {
+    if(result == Result.Ok(value: T)) {
+        return value
+    }
+    return fallback
+}

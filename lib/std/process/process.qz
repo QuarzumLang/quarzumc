@@ -1,0 +1,74 @@
+/*
+    @std/process/process.qz
+    Program arguments, environment variables and termination.
+*/
+import "@std/core/option.qz"
+import "@std/string.qz"
+
+// Published by the runtime at program start (see codegen).
+var qz_argc: int64
+var qz_argv: ptr<uint8>
+var qz_envp: ptr<uint8>
+
+/*
+    Number of command-line arguments (including the program name).
+*/
+function argc() : int64 => qz_argc
+
+/*
+    The argument at `index` (0 is the program name). The returned string is a
+    view into the process argument area.
+*/
+function arg(index: int64) : string {
+    var argv = qz_argv as int64
+    var cstr = *((argv + index * 8) as ptr<int64>)
+    var p = cstr as ptr<char>
+    var len: uint64 = 0
+    while(p[len] != 0 as char) {
+        len += 1
+    }
+    var result: string
+    result.ptr = p
+    result.length = len
+    return result
+}
+
+/*
+    The value of the environment variable `name`, or None if it is not set. The
+    returned string is a view into the process environment area.
+*/
+function env(name: string) : Option<string> {
+    var envp = qz_envp as int64
+    var i: int64 = 0
+    while(true) {
+        var entry = *((envp + i * 8) as ptr<int64>)
+        if(entry == 0) break
+        var p = entry as ptr<char>
+        var len: uint64 = 0
+        while(p[len] != 0 as char) {
+            len += 1
+        }
+        var s: string
+        s.ptr = p
+        s.length = len
+        if(startsWith(s, name) && name.length < len && s[name.length] == '=') {
+            return Option.Some(substring(s, name.length + 1, len))
+        }
+        i += 1
+    }
+    return Option.None
+}
+
+/*
+    Terminates the program with `code`, running pending `defer`s first.
+*/
+function exitProcess(code: int64) {
+    exit code
+}
+
+/*
+    Terminates the program abnormally (exit code 134, like SIGABRT).
+*/
+function abort() {
+    exit 134
+}

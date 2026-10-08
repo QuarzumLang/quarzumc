@@ -1,0 +1,26 @@
+import "@std/collections/binaryheap.qz"
+import "@std/core/compare.qz"
+import "@std/core/option.qz"
+
+function main() {
+    var h = new BinaryHeap<int64>(compare as (int64, int64) => int64)
+    defer h.release()
+
+    h.push(3)
+    h.push(1)
+    h.push(4)
+    h.push(1)
+    h.push(5)
+    if(h.size() != 5) return 1
+    if(unwrap(h.peek()) != 5) return 1
+
+    if(unwrap(h.pop()) != 5) return 1
+    if(unwrap(h.pop()) != 4) return 1
+    if(unwrap(h.pop()) != 3) return 1
+    if(unwrap(h.pop()) != 1) return 1
+    if(unwrap(h.pop()) != 1) return 1
+    if(isSome(h.pop())) return 1
+    if(not h.isEmpty()) return 1
+
+    return 0
+}

@@ -174,3 +174,18 @@ function socketShutdown(fd: int64, how: int64): int64
         - fd: The file descriptor of the socket
 */
 function socketClose(fd: int64): int64
+
+/*
+    Performs a raw Linux syscall.
+
+    This is the lowest level primitive: prefer the named helpers above or the
+    higher level modules (`@std/fs`, `@std/io`, ...). `a1`..`a6` are passed in
+    the argument registers (rdi, rsi, rdx, r10, r8, r9) and the result is the
+    raw return value (>= 0 on success, or -errno).
+
+    Arguments:
+        - n: The syscall number
+        - a1..a6: Up to six arguments (unused ones are ignored)
+*/
+function syscallRaw(n: int64, a1: int64, a2: int64, a3: int64,
+                    a4: int64, a5: int64, a6: int64): int64

@@ -1,0 +1,33 @@
+import "@std/text/builder.qz"
+
+function main() {
+    var b = new StringBuilder()
+    defer b.release()
+
+    b.append("x=")
+    b.append(42)
+    b.append(',')
+    b.append(true)
+    b.append(" y=")
+    b.append(7 as uint64)
+
+    var s = b.build()
+    if(s != "x=42,true y=7") return 1
+    free s.ptr
+
+    b.clear()
+    b.append("hi")
+    if(b.toString() != "hi") return 1
+    if(b.size() != 2) return 1
+
+    // Growth beyond the initial capacity.
+    b.clear()
+    var i: uint64 = 0
+    while(i < 100) {
+        b.append('a')
+        i += 1
+    }
+    if(b.size() != 100) return 1
+
+    return 0
+}

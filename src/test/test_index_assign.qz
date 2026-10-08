@@ -1,0 +1,43 @@
+// Indexed assignment: a[i] = x, with compound operators, on ptr, slice and
+// array-backed List.
+
+import "@std/collections/list.qz"
+
+function main() {
+    var buf = new int64[4]
+    buf[0] = 10
+    buf[1] = 20
+    buf[2] = 30
+    buf[3] = 40
+    buf[1] += 5
+    buf[3] -= 1
+    if(buf[0] + buf[1] + buf[2] + buf[3] != 104) return 1
+    free buf
+
+    // Narrow element widths.
+    var bytes = new uint8[3]
+    bytes[0] = 65
+    bytes[1] = 66
+    bytes[2] = 67
+    if(bytes[0] != 65 || bytes[2] != 67) return 1
+    free bytes
+
+    // Slice.
+    var slice: int64[]
+    slice.length = 2
+    slice.ptr = new int64[2]
+    slice[0] = 7
+    slice[1] = 8
+    if(slice[0] + slice[1] != 15) return 1
+    free slice.ptr
+
+    // List backing buffer.
+    var xs = new List<int64>()
+    defer xs.release()
+    xs.add(1)
+    xs.add(2)
+    xs.data[1] = 20
+    if(xs.getUnchecked(1) != 20) return 1
+
+    return 0
+}

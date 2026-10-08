@@ -22,7 +22,7 @@ import "@std/time/duration.qz"
 function monotonicNanos(): int64 {
     var tp: char[]
     tp.length = 16
-    tp.ptr = alloc char[16]
+    tp.ptr = new char[16]
     clockGetTime(CLOCK_MONOTONIC, tp)
     var base = tp.ptr as int64
     var sec = *((base + 0) as ptr<int64>)
@@ -37,10 +37,10 @@ function monotonicNanos(): int64 {
     Members:
         - startNanos: The clock reading when the timer was started
 */
-class Timer {
+struct Timer {
     var startNanos: int64
 
-    function new(){
+    function Timer(){
         this.startNanos = monotonicNanos()
     }
 
@@ -49,7 +49,7 @@ class Timer {
         Duration.
     */
     function elapsed(): Duration {
-        return new Duration(monotonicNanos() - this.startNanos)
+        return Duration(monotonicNanos() - this.startNanos)
     }
 
     /*

@@ -1,0 +1,12 @@
+tuple Pair<T> (a: T, b: T);
+tuple Triple<A, B, C> (x: A, y: B, z: C);
+
+function main() {
+    var p = Pair<int64>(3, 4)
+    var t = Triple<int64, int64, int64>(1, 2, 3)
+    var hp = new Pair<int64>(5, 6)
+    var total = p.a + p.b + t.x + t.y + t.z + hp.a + hp.b
+    free hp
+    if(total == 24) return 0
+    return 1
+}

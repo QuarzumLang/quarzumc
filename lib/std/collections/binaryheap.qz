@@ -1,0 +1,126 @@
+/*
+    @std/collections/binaryheap.qz
+    BinaryHeap<T>: a priority queue backed by an array.
+
+    The comparator `(T, T) => int64` defines the order; the element for which
+    `cmp` is "greatest" (positive result against others) comes out first. Use
+    `compare` for a max-heap, or `(a, b) => compare(b, a)` for a min-heap.
+
+        var heap = new BinaryHeap<int64>(compare as (int64, int64) => int64)
+        defer heap.release()
+        heap.push(3); heap.push(1); heap.push(2)
+        heap.pop()   // Some(3)
+*/
+import "@std/core/option.qz"
+
+struct BinaryHeap<T> {
+    var data: ptr<T>
+    var capacity: uint64
+    var size: uint64
+    var cmp: (T, T) => int64
+
+    function BinaryHeap(compare: (T, T) => int64) {
+        this.cmp = compare
+        this.capacity = 16
+        this.size = 0
+        this.data = new T[this.capacity]
+    }
+
+    function BinaryHeap(compare: (T, T) => int64, initialCapacity: uint64) {
+        var cap = initialCapacity < 4 ? 4 : initialCapacity
+        this.cmp = compare
+        this.capacity = cap
+        this.size = 0
+        this.data = new T[cap]
+    }
+
+    function swap(i: uint64, j: uint64) {
+        var tmp = this.data[i]
+        this.data[i] = this.data[j]
+        this.data[j] = tmp
+    }
+
+    function siftUp(index: uint64) {
+        var i = index
+        while(i > 0) {
+            var parent = (i - 1) / 2
+            if(this.cmp(this.data[i], this.data[parent]) > 0) {
+                this.swap(i, parent)
+                i = parent
+            } else {
+                break
+            }
+        }
+    }
+
+    function siftDown(index: uint64) {
+        var i = index
+        while(true) {
+            var left = 2 * i + 1
+            var right = 2 * i + 2
+            var largest = i
+            if(left < this.size and this.cmp(this.data[left], this.data[largest]) > 0) {
+                largest = left
+            }
+            if(right < this.size and this.cmp(this.data[right], this.data[largest]) > 0) {
+                largest = right
+            }
+            if(largest == i) break
+            this.swap(i, largest)
+            i = largest
+        }
+    }
+
+    function ensure(extra: uint64) {
+        if(this.size + extra <= this.capacity) return
+        var newCapacity = this.capacity * 2
+        while(newCapacity < this.size + extra) {
+            newCapacity = newCapacity * 2
+        }
+        var newData = new T[newCapacity]
+        var i: uint64 = 0
+        while(i < this.size) {
+            newData[i] = this.data[i]
+            i += 1
+        }
+        free this.data
+        this.data = newData
+        this.capacity = newCapacity
+    }
+
+    function push(value: T) {
+        this.ensure(1)
+        this.data[this.size] = value
+        this.size = this.size + 1
+        this.siftUp(this.size - 1)
+    }
+
+    function pop() : Option<T> {
+        if(this.size == 0) return Option.None
+        var top = this.data[0]
+        this.size = this.size - 1
+        this.data[0] = this.data[this.size]
+        this.siftDown(0)
+        return Option.Some(top)
+    }
+
+    function peek() : Option<T> {
+        if(this.size == 0) return Option.None
+        return Option.Some(this.data[0])
+    }
+
+    function size() : uint64 => this.size
+
+    function isEmpty() : bool => this.size == 0
+
+    function clear() {
+        this.size = 0
+    }
+
+    function release() {
+        free this.data
+        this.data = null
+        this.capacity = 0
+        this.size = 0
+    }
+}

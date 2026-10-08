@@ -1,0 +1,168 @@
+/*
+    @std/collections/iter.qz
+    Iterator-style adapters over `List<T>`, using function values.
+
+        var doubled = map(xs, inc)
+        var evens = filter(xs, isEven)
+        var total = fold(xs, 0, add)
+
+    These are free generic functions: they are instantiated only when called, so
+    they impose no requirement on `List<T>` itself.
+*/
+import "@std/collections/list.qz"
+import "@std/core/option.qz"
+import "@std/core/traits.qz"
+
+/*
+    Calls `f(element)` for every element, in order.
+*/
+function forEach<T>(list: ptr<List<T>>, f: (T) => void) {
+    var i: uint64 = 0
+    while(i < list.size()) {
+        f(list.getUnchecked(i))
+        i += 1
+    }
+}
+
+/*
+    A new List with `f` applied to every element.
+*/
+function map<T, U>(list: ptr<List<T>>, f: (T) => U) : ptr<List<U>> {
+    var result = new List<U>(list.size())
+    var i: uint64 = 0
+    while(i < list.size()) {
+        result.add(f(list.getUnchecked(i)))
+        i += 1
+    }
+    return result
+}
+
+/*
+    A new List with the elements for which `pred` returns true.
+*/
+function filter<T>(list: ptr<List<T>>, pred: (T) => bool) : ptr<List<T>> {
+    var result = new List<T>(list.size())
+    var i: uint64 = 0
+    while(i < list.size()) {
+        var value = list.getUnchecked(i)
+        if(pred(value)) result.add(value)
+        i += 1
+    }
+    return result
+}
+
+/*
+    Left fold: `f(f(...f(init, x0), x1), ...)`.
+*/
+function fold<T, A>(list: ptr<List<T>>, init: A, f: (A, T) => A) : A {
+    var acc = init
+    var i: uint64 = 0
+    while(i < list.size()) {
+        acc = f(acc, list.getUnchecked(i))
+        i += 1
+    }
+    return acc
+}
+
+/*
+    true when `pred` holds for at least one element.
+*/
+function any<T>(list: ptr<List<T>>, pred: (T) => bool) : bool {
+    var i: uint64 = 0
+    while(i < list.size()) {
+        if(pred(list.getUnchecked(i))) return true
+        i += 1
+    }
+    return false
+}
+
+/*
+    true when `pred` holds for every element (vacuously true when empty).
+*/
+function all<T>(list: ptr<List<T>>, pred: (T) => bool) : bool {
+    var i: uint64 = 0
+    while(i < list.size()) {
+        if(not pred(list.getUnchecked(i))) return false
+        i += 1
+    }
+    return true
+}
+
+/*
+    The first element satisfying `pred`, or None.
+*/
+function find<T>(list: ptr<List<T>>, pred: (T) => bool) : Option<T> {
+    var i: uint64 = 0
+    while(i < list.size()) {
+        var value = list.getUnchecked(i)
+        if(pred(value)) return Option.Some(value)
+        i += 1
+    }
+    return Option.None
+}
+
+/*
+    A forward iterator over a `List<T>`. Implements `Iterator<T>`.
+*/
+struct ListIter<T> implements Iterator<T> {
+    var list: ptr<List<T>>
+    var index: uint64
+
+    function ListIter(list: ptr<List<T>>) {
+        this.list = list
+        this.index = 0
+    }
+
+    function next() : Option<T> {
+        if(this.index >= this.list.size()) return Option.None
+        var value = this.list.getUnchecked(this.index)
+        this.index = this.index + 1
+        return Option.Some(value)
+    }
+
+    function hasNext() : bool => this.index < this.list.size()
+}
+
+/*
+    An iterator over `list`.
+*/
+function iterate<T>(list: ptr<List<T>>) : ListIter<T> {
+    return ListIter<T>(list)
+}
+
+/*
+    Drains `iter` into a new List. The caller owns the result.
+*/
+function iterCollect<T>(iter: ptr<ListIter<T>>) : ptr<List<T>> {
+    var result = new List<T>()
+    var item = iter.next()
+    while(isSome(item)) {
+        result.add(unwrap(item))
+        item = iter.next()
+    }
+    return result
+}
+
+/*
+    Number of remaining elements in `iter`.
+*/
+function iterCount<T>(iter: ptr<ListIter<T>>) : uint64 {
+    var count: uint64 = 0
+    var item = iter.next()
+    while(isSome(item)) {
+        count = count + 1
+        item = iter.next()
+    }
+    return count
+}
+
+/*
+    Calls `f` for every remaining element of `iter`.
+*/
+function iterForEach<T>(iter: ptr<ListIter<T>>, f: (T) => void) {
+    var item = iter.next()
+    while(isSome(item)) {
+        f(unwrap(item))
+        item = iter.next()
+    }
+}

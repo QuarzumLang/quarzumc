@@ -1,95 +1,53 @@
 /*
-    @std/io.qz - 02/08/2026
-    Standard I/O library for Quarzum
+    @std/io.qz
+    Standard input and output.
+
+    `print`/`println` write directly to the standard descriptors. For
+    high-throughput output, wrap a descriptor with `BufWriter`
+    (`@std/io/bufwriter.qz`) and flush it explicitly.
 */
-import "@std/file.qz"
+import "@std/io/fd.qz"
+import "@std/io/bufreader.qz"
+
+const STDIN_FD: int64 = 0
+const STDOUT_FD: int64 = 1
+const STDERR_FD: int64 = 2
 
 /*
-    Standard input stream (file descriptor 0)
-
-    Reading this file provides user input or piped data.
-    Do not close this stream.
+    Writes `message` to standard output.
 */
-const stdin = File(0)
-
-/*
-    Standard output stream (file descriptor 1)
-
-    Writing this file allows to write bytes of data into
-    the terminal or the standard output.
-    Do not close this stream.
-*/
-const stdout = File(1)
-
-/*
-    Standard error stream (file descriptor 2)
-
-    Writing this file allows to write bytes of data into
-    the terminal or the standard error.
-    Do not close this stream.
-*/
-const stderr = File(2)
-
-/*
-    Prints a message into the standard output.
-
-    Arguments:
-        - message: The content to display
-    Example:
-        print("Hello world!"); 
-*/
-function print(message: string){
-    fwrite(stdout, message)
+function print(message: string) {
+    fdWrite(STDOUT_FD, message)
 }
 
 /*
-    Prints a message into the standard output.
-    The message ends with a new line character (\n).
-
-    Arguments:
-        - message: The content to display
-    Example:
-        println("Hello world!"); 
+    Writes `message` to standard output followed by a newline.
 */
-function println(message: string){
-    fwrite(stdout, message)
-    fwrite(stdout, "\n")
+function println(message: string) {
+    fdWrite(STDOUT_FD, message)
+    fdWrite(STDOUT_FD, "\n")
 }
 
 /*
-    Prints a message into the standard error.
-
-    Arguments:
-        - message: The content to display
-    Example:
-        eprint("An error has ocurred"); 
+    Writes `message` to standard error.
 */
-function eprint(message: string){
-    fwrite(stderr, message)
+function eprint(message: string) {
+    fdWrite(STDERR_FD, message)
 }
 
 /*
-    Prints a message into the standard error.
-    The message ends with a new line character (\n).
-
-    Arguments:
-        - message: The content to display
-    Example:
-        eprintln("An error has ocurred"); 
+    Writes `message` to standard error followed by a newline.
 */
-function eprintln(message: string){
-    fwrite(stderr, message)
-    fwrite(stderr, "\n")
+function eprintln(message: string) {
+    fdWrite(STDERR_FD, message)
+    fdWrite(STDERR_FD, "\n")
 }
 
 /*
-    Reads the standard input as a string.
-
-    Returns:
-        - A string with the data given in the standard
-        input.
-
-    Example:
-        const message = input();
+    Reads all of standard input into a string. The caller owns the buffer.
 */
-function input(): string => fread(stdin)
+function input() : string {
+    var reader = new BufReader(STDIN_FD, 4096)
+    defer reader.release()
+    return reader.readAll()
+}

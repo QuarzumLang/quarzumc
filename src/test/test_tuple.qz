@@ -1,0 +1,13 @@
+tuple Point (x: int, y: int);
+
+function sum(p: Point): int => p.x + p.y
+
+function main() {
+    var p = Point(3, 4)
+    var q: Point = Point(10, 20)
+    var hp = new Point(1, 2)
+    var total = sum(p) + sum(q) + hp.x + hp.y
+    free hp
+    if(total == 40) return 0
+    return 1
+}

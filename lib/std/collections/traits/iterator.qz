@@ -2,7 +2,7 @@
     @std/collections/traits/iterator.qz - 07/08/2026
     Iterator trait for the Quarzum Standard Library
 */
-import "@std/types/optional.qz"
+import "@std/core/option.qz"
 /*
     Defines a generic Iterator. An Iterator allows to fetch
     the next element in a sequence.
@@ -16,5 +16,5 @@ trait Iterator<T> {
             - The next value in the sequence, if it has not ended
             - None if the sequence has ended
     */
-    function next(): Optional<T>
+    function next(): Option<T>
 }

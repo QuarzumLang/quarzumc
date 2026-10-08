@@ -2,7 +2,7 @@
     @std/collections/traits/iterable.qz - 02/08/2026
     Iterable trait for the Quarzum Standard Library
 */
-import "@std/types/optional.qz"
+import "@std/core/option.qz"
 
 /*
     Defines a generic Iterable. An Iterable allows to
@@ -25,8 +25,8 @@ trait Iterable<T> {
         Gets the first element of the Iterable
 
         Returns:
-            - Optional.Some(T) if the Iterable has elements
-            - Optional.None if the Iterable is empty
+            - Option.Some(T) if the Iterable has elements
+            - Option.None if the Iterable is empty
     */
-    function first(): Optional<T>
+    function first(): Option<T>
 }
